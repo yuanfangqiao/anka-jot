@@ -1,0 +1,207 @@
+/** store.ts — Jot 前端数据中枢：notes 列表、当前笔记、采集管线、标签、设置。
+ *  一切写操作先落 IndexedDB（设备端事实源），同步由 lib/sync 后台接力。 */
+import { computed, reactive, ref } from 'vue'
+import type { JotAtt, JotNote, JotTag } from '../host'
+import { callJot, TAG_COLORS } from '../host'
+import * as db from '../lib/db'
+import { processImage, sha256Hex } from '../lib/image'
+import { SearchIndex } from '../lib/search'
+import { refreshPending, onSyncChanged, stripAtt, stripLocal } from '../lib/sync'
+
+export const index = new SearchIndex()
+
+export const notes = ref<JotNote[]>([])
+export const tags = ref<JotTag[]>([])
+export const ready = ref(false)
+
+export const settings = reactive({
+  locationOn: true,
+  lang: 'zh-CN',
+})
+
+export const sortedNotes = computed(() =>
+  [...notes.value].sort((a, b) =>
+    Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt))
+
+// ─── 初始化 ────────────────────────────────────────
+export async function initStore() {
+  const [ns, ts] = await Promise.all([db.listNotes(), db.listTags()])
+  for (const n of ns) n.atts = await db.attsOf(n.id)
+  notes.value = ns
+  tags.value = ts
+  for (const n of ns) index.upsert(n, n.atts ?? [])
+  settings.locationOn = (await db.kvGet<boolean>('locationOn')) ?? true
+  settings.lang = (await db.kvGet<string>('lang')) ?? 'zh-CN'
+  await refreshPending()
+  onSyncChanged(() => { void reload() })
+  ready.value = true
+}
+
+export async function reload() {
+  const ns = await db.listNotes()
+  for (const n of ns) n.atts = await db.attsOf(n.id)
+  notes.value = ns
+  tags.value = await db.listTags()
+  for (const n of ns) index.upsert(n, n.atts ?? [])
+  await refreshPending()
+}
+
+// ─── 笔记 CRUD ─────────────────────────────────────
+export function newNote(source: JotNote['source'] = 'text'): JotNote {
+  return {
+    id: crypto.randomUUID(), title: '', text: '', tags: [], source,
+    createdAt: Date.now(), updatedAt: Date.now(), pinned: false,
+    color: null, location: null, deleted: false, rev: 0, syncState: 'local', atts: [],
+  }
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+/** 500ms 防抖自动存；空笔记（无标题/正文/附件）不入库 */
+export function saveDebounced(note: JotNote, immediate = false) {
+  if (saveTimer) clearTimeout(saveTimer)
+  const run = () => void persist(note)
+  if (immediate) run()
+  else saveTimer = setTimeout(run, 500)
+}
+
+async function persist(note: JotNote) {
+  console.log('[jot] persist 触发', note.id, note.title)
+  const atts = await db.attsOf(note.id)
+  const empty = !note.title.trim() && !note.text.trim() && atts.length === 0
+  if (empty) { console.log('[jot] persist 跳过：空笔记'); return }
+  note.updatedAt = Date.now()
+  note.syncState = 'local'
+  await db.saveNote(note, true)
+  const i = notes.value.findIndex(n => n.id === note.id)
+  if (i >= 0) { notes.value[i] = { ...note } } else { notes.value.push({ ...note }) }
+  index.upsert(note, atts)
+  for (const t of note.tags) await ensureTag(t)
+  await pushThrough(note, atts)
+  await refreshPending()
+}
+
+/** 写穿透：编辑即直写服务端 SQLite；失败静默，由 outbox/同步引擎兜底 */
+async function pushThrough(note: JotNote, atts: JotAtt[]) {
+  try {
+    const r = await callJot('upsert_note', { note: stripLocal(note), atts: atts.map(stripAtt) })
+    console.log('[jot] pushThrough 结果', r)
+    if (r?.serverRev != null) {
+      note.rev = r.serverRev
+      note.syncState = 'synced'
+      await db.saveNote(note, false)
+      const i = notes.value.findIndex(n => n.id === note.id)
+      if (i >= 0) notes.value[i] = { ...note }
+      // 附件媒体尚未上传时保留 outbox 条目，交由同步引擎补传
+      if (atts.every(a => a.serverPath)) await db.outboxDropNote(note.id)
+    }
+  } catch { /* 离线或后端不可用：outbox 兜底 */ }
+}
+
+export async function togglePin(note: JotNote) {
+  note.pinned = !note.pinned
+  await persist(note)
+}
+
+export async function removeNote(note: JotNote) {
+  const cur = await db.getNote(note.id)
+  if (cur) await db.putHistory(cur)
+  await db.tombstone(note.id)
+  notes.value = notes.value.filter(n => n.id !== note.id)
+  index.remove(note.id)
+  try {
+    await callJot('delete_note', { id: note.id })
+    await db.outboxDropNote(note.id)
+  } catch { /* 失败由 outbox 兜底 */ }
+  await refreshPending()
+}
+
+// ─── 附件管线 ──────────────────────────────────────
+export async function attachImage(noteId: string, src: Blob, pendingOcr = false): Promise<JotAtt> {
+  const p = await processImage(src)
+  const att: JotAtt = {
+    id: crypto.randomUUID(), noteId, kind: 'image', sha256: p.sha256,
+    width: p.width, height: p.height, createdAt: Date.now(), pendingOcr,
+  }
+  await db.putBlob(att.id, p.full)
+  await db.putBlob(att.id + ':thumb', p.thumb)
+  await db.putAtt(att)
+  await touchNote(noteId)
+  return att
+}
+
+export async function attachAudio(noteId: string, blob: Blob, duration: number,
+                                  peaks: number[], transcript: JotAtt['transcript']): Promise<JotAtt> {
+  const att: JotAtt = {
+    id: crypto.randomUUID(), noteId, kind: 'audio', duration,
+    peaks, transcript, sha256: await sha256Hex(blob), createdAt: Date.now(),
+  }
+  await db.putBlob(att.id, blob)
+  await db.putAtt(att)
+  await touchNote(noteId)
+  return att
+}
+
+async function touchNote(noteId: string) {
+  let n = await db.getNote(noteId)
+  if (!n) n = notes.value.find(x => x.id === noteId) ?? null  // 兜底：笔记本体尚未入库时回退内存
+  if (!n) return
+  n.updatedAt = Date.now()
+  n.syncState = 'local'
+  await db.saveNote(n, true)
+  const i = notes.value.findIndex(x => x.id === noteId)
+  if (i >= 0) { notes.value[i] = { ...n } }
+  index.upsert(n, await db.attsOf(noteId))
+  await refreshPending()
+}
+
+export async function updateAtt(att: JotAtt) {
+  await db.putAtt(att)
+  const n = await db.getNote(att.noteId)
+  if (n) index.upsert(n, await db.attsOf(att.noteId))
+}
+
+// ─── 标签 ──────────────────────────────────────────
+export async function ensureTag(name: string): Promise<JotTag> {
+  const clean = name.trim().replace(/^@/, '')
+  let t = tags.value.find(x => x.name === clean)
+  if (!t) {
+    t = { name: clean, color: TAG_COLORS[tags.value.length % TAG_COLORS.length], pinned: false, lastUsedAt: Date.now() }
+    tags.value.push(t)
+  } else t.lastUsedAt = Date.now()
+  await db.putTag(t, true)
+  return t
+}
+
+export async function tagColor(name: string): Promise<string> {
+  return (await ensureTag(name)).color ?? TAG_COLORS[0]
+}
+
+// ─── 位置采集（3s 超时，失败静默） ──────────────────
+export function captureLocation(note: JotNote) {
+  if (!settings.locationOn || !navigator.geolocation) return
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      note.location = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+      void persist(note)
+    },
+    () => { /* 拒绝/超时静默 */ },
+    { timeout: 3000, maximumAge: 300_000 },
+  )
+}
+
+// ─── 封面/摘要（卡片渲染用） ───────────────────────
+const covers = reactive(new Map<string, string | null>())
+export async function coverOf(noteId: string): Promise<string | null> {
+  if (covers.has(noteId)) return covers.get(noteId)!
+  const atts = await db.attsOf(noteId)
+  const img = atts.find(a => a.kind === 'image')
+  let url: string | null = null
+  if (img) url = (await db.blobUrl(img.id + ':thumb')) ?? (await db.blobUrl(img.id))
+  covers.set(noteId, url)
+  return url
+}
+export function invalidateCover(noteId: string) { covers.delete(noteId) }
+
+export function hasAudio(atts?: JotAtt[]): boolean {
+  return Boolean(atts?.some(a => a.kind === 'audio'))
+}
