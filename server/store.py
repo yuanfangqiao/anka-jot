@@ -8,6 +8,7 @@ client_rev >= server_rev 则覆盖，否则保留服务端并回传。
 import json
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 SCHEMA = """
@@ -54,7 +55,7 @@ class Store:
     def __init__(self, data_dir: Path):
         data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = data_dir / 'jot.db'
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             c.executescript(SCHEMA)
 
     def _c(self) -> sqlite3.Connection:
@@ -64,28 +65,32 @@ class Store:
 
     # ─── rev（服务端权威定序） ─────────────────────────
     def _next_rev(self, c) -> int:
-        row = c.execute("SELECT v FROM kv WHERE k='serverRev'").fetchone()
-        nxt = (int(row[0]) if row else 0) + 1
-        c.execute("INSERT INTO kv(k,v) VALUES('serverRev',?) "
-                  "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(nxt),))
-        return nxt
+        # 单条 UPSERT 原子自增（WAL 下写串行），避免并发读改写产生重复 rev
+        c.execute("INSERT INTO kv(k, v) VALUES('serverRev', '1') "
+                  "ON CONFLICT(k) DO UPDATE SET v = CAST(v AS INTEGER) + 1")
+        return int(c.execute("SELECT v FROM kv WHERE k='serverRev'").fetchone()[0])
 
     def server_rev(self) -> int:
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             row = c.execute("SELECT v FROM kv WHERE k='serverRev'").fetchone()
             return int(row[0]) if row else 0
 
     # ─── 笔记 ────────────────────────────────────────
-    def upsert_note(self, note: dict, atts: list) -> tuple[dict, bool]:
-        """LWW 合并。返回 (最终笔记, 是否采用了客户端版本)。"""
+    def upsert_note(self, note: dict, atts: list | None) -> tuple[dict, bool]:
+        """LWW 合并。返回 (最终笔记, 是否采用了客户端版本)。
+        atts=None 表示调用方未提供附件列表 → 保留服务端现有附件；
+        atts=[] 表示显式清空。"""
         nid = note.get('id')
         if not nid:
             raise ValueError('note.id 缺失')
         now = time.time() * 1000
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             row = c.execute('SELECT rev FROM notes WHERE id=?', (nid,)).fetchone()
             server_rev = row[0] if row else -1
-            client_rev = int(note.get('rev') or 0)
+            try:
+                client_rev = int(note.get('rev') or 0)
+            except (TypeError, ValueError):
+                raise ValueError('note.rev 非法')
             applied = client_rev >= server_rev
             new_rev = self._next_rev(c)
             if applied:
@@ -105,9 +110,10 @@ class Store:
                           'ON CONFLICT(id) DO UPDATE SET '
                           + ','.join(f'{k}=excluded.{k}' for k in NOTE_COLS),
                           tuple(vals[k] for k in NOTE_COLS))
-                c.execute('DELETE FROM atts WHERE noteId=?', (nid,))
-                for a in atts or []:
-                    self._insert_att(c, nid, a)
+                if atts is not None:
+                    c.execute('DELETE FROM atts WHERE noteId=?', (nid,))
+                    for a in atts or []:
+                        self._insert_att(c, nid, a)
                 for t in (note.get('tags') or []):
                     c.execute('INSERT INTO tags(name,lastUsedAt) VALUES(?,?) '
                               'ON CONFLICT(name) DO UPDATE SET lastUsedAt=excluded.lastUsedAt',
@@ -146,7 +152,7 @@ class Store:
                 c.close()
 
     def delete_note(self, nid: str) -> bool:
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             if not c.execute('SELECT 1 FROM notes WHERE id=?', (nid,)).fetchone():
                 return False
             rev = self._next_rev(c)
@@ -154,40 +160,63 @@ class Store:
                       (rev, time.time() * 1000, nid))
             return True
 
-    def snapshot(self, since_rev: int = 0) -> dict:
-        with self._c() as c:
+    def snapshot(self, since_rev: int = 0, limit: int = 500) -> dict:
+        """增量快照（分页）：nextRev=本页最大 rev，客户端以其为新水位；hasMore 表示还有剩余。"""
+        with closing(self._c()) as c, c:
             rows = c.execute(f'SELECT {",".join(NOTE_COLS)} FROM notes '
-                             'WHERE rev>? ORDER BY rev', (since_rev,)).fetchall()
+                             'WHERE rev>? ORDER BY rev LIMIT ?', (since_rev, limit + 1)).fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
             notes = []
-            for r in rows:
-                n = _row_to_dict(r, NOTE_COLS)
-                ar = c.execute(f'SELECT {",".join(ATT_COLS)} FROM atts WHERE noteId=? '
-                               'ORDER BY createdAt', (n['id'],)).fetchall()
-                n['atts'] = [_row_to_dict(x, ATT_COLS) for x in ar]
-                notes.append(n)
+            if rows:
+                # 批量取附件，避免每笔记一次查询（N+1）
+                ids = [r[NOTE_COLS.index('id')] for r in rows]
+                marks = ','.join('?' * len(ids))
+                ar = c.execute(f'SELECT {",".join(ATT_COLS)} FROM atts '
+                               f'WHERE noteId IN ({marks}) ORDER BY createdAt', ids).fetchall()
+                by_note: dict[str, list] = {}
+                for r in ar:
+                    d = _row_to_dict(r, ATT_COLS)
+                    by_note.setdefault(d['noteId'], []).append(d)
+                for r in rows:
+                    n = _row_to_dict(r, NOTE_COLS)
+                    n['atts'] = by_note.get(n['id'], [])
+                    notes.append(n)
             tags = [{'name': r[0], 'color': r[1], 'pinned': bool(r[2]),
                      'lastUsedAt': r[3]}
                     for r in c.execute('SELECT name,color,pinned,lastUsedAt FROM tags')]
-            return {'notes': notes, 'tags': tags, 'serverRev': self.server_rev()}
+            return {'notes': notes, 'tags': tags, 'serverRev': self.server_rev(),
+                    'hasMore': has_more, 'nextRev': rows[-1][NOTE_COLS.index('rev')] if rows else since_rev}
 
     def set_att_media(self, att_id: str, path: str, thumb_path: str | None):
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             c.execute('UPDATE atts SET serverPath=?, thumbPath=? WHERE id=?',
                       (path, thumb_path, att_id))
+            self._bump_note_rev(c, att_id)
+
+    def _bump_note_rev(self, c, att_id: str):
+        """附件变更时 bump 所属笔记 rev，保证 snapshot 能把变更同步给其他客户端"""
+        row = c.execute('SELECT noteId FROM atts WHERE id=?', (att_id,)).fetchone()
+        if not row:
+            return
+        rev = self._next_rev(c)
+        c.execute('UPDATE notes SET rev=?, updatedAt=? WHERE id=?',
+                  (rev, time.time() * 1000, row[0]))
 
     def set_att_text(self, att_id: str, field: str, value) -> bool:
         if field not in ('ocrText', 'transcript'):
             raise ValueError(f'字段 {field} 不可写')
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             if not c.execute('SELECT 1 FROM atts WHERE id=?', (att_id,)).fetchone():
                 return False
             if field == 'transcript':
                 value = json.dumps(value, ensure_ascii=False)
             c.execute(f'UPDATE atts SET {field}=? WHERE id=?', (value, att_id))
+            self._bump_note_rev(c, att_id)
             return True
 
     def att_row(self, att_id: str) -> dict | None:
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             row = c.execute(f'SELECT {",".join(ATT_COLS)} FROM atts WHERE id=?',
                             (att_id,)).fetchone()
             return _row_to_dict(row, ATT_COLS) if row else None
@@ -196,7 +225,7 @@ class Store:
     def upsert_tag(self, name: str, color: str | None, pinned: bool | None):
         if not name:
             raise ValueError('标签名不能为空')
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             c.execute('INSERT INTO tags(name,color,pinned,lastUsedAt) VALUES(?,?,?,?) '
                       'ON CONFLICT(name) DO UPDATE SET '
                       'color=COALESCE(?,color), pinned=COALESCE(?,pinned)',
@@ -205,13 +234,13 @@ class Store:
                        color, int(pinned) if pinned is not None else None))
 
     def put_media(self, sha256: str, path: str, size: int, kind: str):
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             c.execute('INSERT OR IGNORE INTO media(sha256,path,size,kind,createdAt) '
                       'VALUES(?,?,?,?,?)',
                       (sha256, path, size, kind, time.time() * 1000))
 
     def has_media(self, sha256: str) -> dict | None:
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             row = c.execute('SELECT path,size,kind FROM media WHERE sha256=?',
                             (sha256,)).fetchone()
             return {'path': row[0], 'size': row[1], 'kind': row[2]} if row else None
@@ -220,7 +249,7 @@ class Store:
     def search(self, q: str, kind: str | None = None, tag: str | None = None,
                limit: int = 50) -> list:
         like = f'%{q}%'
-        with self._c() as c:
+        with closing(self._c()) as c, c:
             rows = c.execute(
                 'SELECT DISTINCT n.id, n.title, n.updatedAt FROM notes n '
                 'LEFT JOIN atts a ON a.noteId=n.id '

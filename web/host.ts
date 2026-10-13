@@ -48,19 +48,27 @@ export interface JotNote {
 }
 export interface JotTag { name: string; color: string | null; pinned: boolean; lastUsedAt: number }
 
+/** 日志只打方法名与参数规模，避免 base64 分块等大 payload 拖垮 console */
+function _argDigest(args: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [k, v] of Object.entries(args ?? {})) {
+    if (typeof v === 'string' && v.length > 256) parts.push(`${k}:<str ${v.length}>`)
+    else parts.push(`${k}:${typeof v === 'object' && v !== null ? '[obj]' : String(v)}`)
+  }
+  return parts.join(' ')
+}
+
 export async function callJot<T = any>(method: string, args: Record<string, unknown> = {}): Promise<T> {
-  console.log('[jot] call →', method, args)
   try {
-    const r = await useUi().api.callApp('jot', method, args)
-    console.log('[jot] call ←', method, r)
+    const r = await useUi().api.callApp('anka-jot', method, args)
     return r?.result as T
   } catch (e) {
-    console.error('[jot] call ✗', method, e)
+    console.error('[jot] call ✗', method, _argDigest(args), e)
     throw e
   }
 }
 
-export const MEDIA_BASE = '/plugins/jot/'
+export const MEDIA_BASE = '/plugins/anka-jot/'
 export function mediaUrl(p?: string | null): string | null {
   return p ? MEDIA_BASE + p : null
 }

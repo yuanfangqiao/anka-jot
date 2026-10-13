@@ -29,7 +29,7 @@ function open(): Promise<IDBDatabase> {
       }
     }
     rq.onsuccess = () => res(rq.result)
-    rq.onerror = () => rej(rq.error)
+    rq.onerror = () => { dbp = null; rej(rq.error) } // 打开失败不缓存，允许后续重试
   })
   return dbp
 }
@@ -100,6 +100,14 @@ export async function putAtt(a: JotAtt) {
   const d = await open()
   const t = d.transaction(T.atts, 'readwrite'); t.objectStore(T.atts).put(plain(a)); await done(t)
 }
+/** 删除单个附件及其 blob（拉取时清理服务端已删的附件） */
+export async function delAtt(attId: string) {
+  const d = await open()
+  const t = d.transaction([T.atts, T.blobs], 'readwrite')
+  t.objectStore(T.atts).delete(attId)
+  t.objectStore(T.blobs).delete(attId); t.objectStore(T.blobs).delete(attId + ':thumb')
+  await done(t)
+}
 export async function attsOf(noteId: string): Promise<JotAtt[]> {
   const d = await open()
   const r = await req<JotAtt[]>(d.transaction(T.atts).objectStore(T.atts).index('noteId').getAll(noteId))
@@ -151,7 +159,7 @@ export async function putTag(t: JotTag, queueSync = true) {
 }
 
 // ─── outbox ────────────────────────────────────────
-export interface OutboxItem { seq?: number; type: string; noteId?: string; name?: string; createdAt: number }
+export interface OutboxItem { seq?: number; type: string; noteId?: string; name?: string; attempts?: number; createdAt: number }
 export async function outboxAll(): Promise<OutboxItem[]> {
   const d = await open()
   return req<OutboxItem[]>(d.transaction(T.outbox).objectStore(T.outbox).getAll())
@@ -163,6 +171,23 @@ export async function outboxCount(): Promise<number> {
 export async function outboxDrop(seq: number) {
   const d = await open()
   const t = d.transaction(T.outbox, 'readwrite'); t.objectStore(T.outbox).delete(seq); await done(t)
+}
+/** 记录一次失败：attempts+1；达到上限则删除（死信）。返回是否已被死信丢弃 */
+export async function outboxFail(seq: number, maxAttempts: number): Promise<boolean> {
+  const d = await open()
+  const t = d.transaction(T.outbox, 'readwrite')
+  const it = await req<OutboxItem | undefined>(t.objectStore(T.outbox).get(seq))
+  if (!it) { await done(t); return true }
+  const n = (it.attempts ?? 0) + 1
+  if (n >= maxAttempts) {
+    t.objectStore(T.outbox).delete(seq)
+    await done(t)
+    console.warn('[jot] outbox 死信丢弃:', it.type, it.noteId ?? it.name ?? '')
+    return true
+  }
+  t.objectStore(T.outbox).put({ ...it, attempts: n })
+  await done(t)
+  return false
 }
 /** 直写服务端成功后，清掉该笔记的待同步条目 */
 export async function outboxDropNote(noteId: string) {

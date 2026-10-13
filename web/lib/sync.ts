@@ -54,21 +54,32 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
 }
 
 // ─── 推送 ──────────────────────────────────────────
+/** 单条 outbox 最大重试次数，超过即丢弃（死信），避免毒丸堵死整个队列 */
+const MAX_OUTBOX_ATTEMPTS = 5
+
 export async function pushOutbox(): Promise<void> {
   if (pushing || !syncState.online) return
   pushing = true
   syncState.syncing = true
+  let changed = false
   try {
     const items = await db.outboxAll()
     for (const it of items) {
       try {
         if (it.type === 'note.upsert' && it.noteId) {
           const note = await db.getNote(it.noteId)
-          if (!note) { await db.outboxDrop(it.seq!); continue }
+          if (!note) { await db.outboxDrop(it.seq!); changed = true; continue }
           const atts = await db.attsOf(note.id)
-          for (const a of atts) if (!a.serverPath) await uploadAtt(a)
+          for (const a of atts) {
+            if (!a.serverPath) {
+              // 媒体缺失（本地 blob/sha256 缺失）视为硬失败：不能把缺媒体的笔记同步上去
+              const ok = await uploadAtt(a)
+              if (!ok) throw new Error(`媒体上传失败：${a.id}`)
+            }
+          }
           const fresh = await db.attsOf(note.id)
-          await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })
+          const r = await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })
+          if (r?.applied) await markSynced(it.noteId, r.serverRev)
         } else if (it.type === 'note.delete' && it.noteId) {
           await callJot('delete_note', { id: it.noteId })
         } else if (it.type === 'tag.upsert' && it.name) {
@@ -77,9 +88,11 @@ export async function pushOutbox(): Promise<void> {
           if (t) await callJot('upsert_tag', { name: t.name, color: t.color, pinned: t.pinned })
         }
         await db.outboxDrop(it.seq!)
-        if (it.noteId) await markSynced(it.noteId)
+        changed = true
       } catch (e: any) {
         syncState.lastError = e?.message ?? String(e)
+        const dead = await db.outboxFail(it.seq!, MAX_OUTBOX_ATTEMPTS)
+        if (dead) changed = true
         break // 保序：失败即停，下轮重试
       }
     }
@@ -91,7 +104,7 @@ export async function pushOutbox(): Promise<void> {
     pushing = false
     syncState.syncing = false
     await refreshPending()
-    onChanged?.()
+    if (changed) onChanged?.() // 仅在队列确有变化时刷新 UI，避免每 60s 全量重渲染
   }
 }
 
@@ -103,34 +116,43 @@ export function stripAtt(a: JotAtt) {
   const { pendingOcr: _p, ...rest } = a as any
   return rest
 }
-async function markSynced(noteId: string) {
+async function markSynced(noteId: string, serverRev?: number) {
   const n = await db.getNote(noteId)
-  if (n && n.syncState !== 'synced') await db.saveNote({ ...n, syncState: 'synced' }, false)
+  if (!n) return
+  const rev = serverRev ?? n.rev ?? 0
+  if (n.syncState === 'synced' && n.rev === rev) return
+  await db.saveNote({ ...n, syncState: 'synced', rev }, false)
 }
 
 // ─── 拉取合并 ──────────────────────────────────────
 export async function pullMerge(): Promise<number> {
-  const since = (await db.kvGet<number>('lastPullRev')) ?? 0
-  const snap = await callJot('snapshot', { sinceRev: since })
+  let since = (await db.kvGet<number>('lastPullRev')) ?? 0
   let applied = 0
-  for (const sn of snap.notes ?? []) {
-    const local = await db.getNote(sn.id)
-    if (!local || (local.syncState === 'synced' && sn.rev > (local.rev ?? 0)) || sn.rev > (local.rev ?? 0)) {
-      if (local && (local.rev ?? 0) > 0 && local.syncState === 'local') {
-        await db.putHistory(local) // 本地也有改动且将覆盖 → 留档（极端竞态兜底）
+  for (let page = 0; page < 50; page++) {
+    const snap = await callJot('snapshot', { sinceRev: since, limit: 500 })
+    for (const sn of snap.notes ?? []) {
+      const local = await db.getNote(sn.id)
+      // 本地有未推送编辑：服务端版本不覆盖，避免丢本地改动（服务端版本留档兜底）
+      if (local && local.syncState === 'local') {
+        await db.putHistory({ ...sn })
+        continue
       }
+      if (local && sn.rev <= (local.rev ?? 0)) continue
       const note: JotNote = { ...sn, syncState: 'synced' }
       await db.saveNote(note, false)
+      // 附件差集：服务端已没有的本地附件（及 blob）删除，防孤儿数据
+      const localAtts = await db.attsOf(sn.id)
+      const serverIds = new Set((sn.atts ?? []).map(a => a.id))
+      for (const a of localAtts) if (!serverIds.has(a.id)) await db.delAtt(a.id)
       for (const a of sn.atts ?? []) await db.putAtt(a)
       applied++
     }
+    // 水位取本页最大 rev（服务端全局 serverRev 含被拒写的 rev，不能直接采用）
+    since = snap.nextRev ?? since
+    await db.kvSet('lastPullRev', since)
+    syncState.lastPullRev = since
+    if (!snap.hasMore) break
   }
-  for (const t of snap.tags ?? []) {
-    const tags = await db.listTags()
-    if (!tags.find(x => x.name === t.name)) await db.putTag(t as any, false)
-  }
-  await db.kvSet('lastPullRev', snap.serverRev ?? since)
-  syncState.lastPullRev = snap.serverRev ?? since
   if (applied) onChanged?.()
   return applied
 }
@@ -143,10 +165,16 @@ export async function syncNow(): Promise<void> {
 
 // ─── 生命周期 ──────────────────────────────────────
 let timer = 0
+const onOnline = () => { syncState.online = true; void syncNow() }
+const onOffline = () => { syncState.online = false }
 export function startSyncLoop() {
-  window.addEventListener('online', () => { syncState.online = true; void syncNow() })
-  window.addEventListener('offline', () => { syncState.online = false })
+  window.addEventListener('online', onOnline)
+  window.addEventListener('offline', onOffline)
   void syncNow()
   timer = window.setInterval(() => { if (!document.hidden) void syncNow() }, 60_000)
 }
-export function stopSyncLoop() { window.clearInterval(timer) }
+export function stopSyncLoop() {
+  window.clearInterval(timer)
+  window.removeEventListener('online', onOnline)
+  window.removeEventListener('offline', onOffline)
+}

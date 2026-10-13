@@ -14,16 +14,16 @@ from app.cordis import Service
 
 log = logging.getLogger('agentos.jot')
 
-name = 'jot'
+name = 'anka-jot'
 inject = ['llm']
-provide = ['jot']
+provide = ['anka-jot']
 
 SERVER_DIR = Path(__file__).resolve().parent
 DATA_DIR = SERVER_DIR.parent / 'data'
 
 
 def _load(mod_name: str, filename: str):
-    full = f'app_plugins.jot.{mod_name}'
+    full = f'app_plugins.anka-jot.{mod_name}'
     if full in sys.modules:
         return sys.modules[full]
     spec = importlib.util.spec_from_file_location(full, SERVER_DIR / filename)
@@ -39,34 +39,49 @@ ai_mod = _load('ai', 'ai.py')
 
 MAX_ATTS_PER_NOTE = 50
 MAX_TEXT_LEN = 200_000
+MAX_TITLE_LEN = 200
+MAX_TAGS = 50
 
 
 def _valid_note(note: dict) -> dict:
     if not isinstance(note, dict) or not note.get('id'):
         raise ValueError('note 非法')
-    if len(note.get('text') or '') > MAX_TEXT_LEN:
+    text = note.get('text') or ''
+    if not isinstance(text, str) or len(text) > MAX_TEXT_LEN:
         raise ValueError('正文超长')
+    title = note.get('title') or ''
+    if not isinstance(title, str) or len(title) > MAX_TITLE_LEN:
+        raise ValueError('标题超长')
+    tags = note.get('tags') or []
+    if not isinstance(tags, list) or len(tags) > MAX_TAGS or not all(isinstance(t, str) for t in tags):
+        raise ValueError('tags 非法')
+    rev = note.get('rev')
+    if rev is not None and (not isinstance(rev, (int, float)) or isinstance(rev, bool) or rev < 0):
+        raise ValueError('note.rev 非法')
     note.setdefault('tags', [])
     return note
 
 
 class Jot(Service):
     def __init__(self, ctx):
-        super().__init__(ctx, 'jot')
+        super().__init__(ctx, 'anka-jot')
         self.store = store_mod.Store(DATA_DIR)
         self.media = media_mod.MediaStore(DATA_DIR)
         log.info('jot service ready, data=%s', DATA_DIR)
 
     # ─── 快照（/state 也用它） ──────────────────────
-    def snapshot(self, sinceRev: int = 0):
-        return self.store.snapshot(int(sinceRev or 0))
+    def snapshot(self, sinceRev: int = 0, limit: int = 500):
+        return self.store.snapshot(int(sinceRev or 0), min(int(limit or 500), 1000))
 
     # ─── 笔记 ───────────────────────────────────────
     def upsert_note(self, note: dict, atts: list | None = None):
-        log.info('upsert_note 收到: id=%s title=%r', (note or {}).get('id'),
-                 (note or {}).get('title'))
         note = _valid_note(note)
-        atts = list(atts or [])[:MAX_ATTS_PER_NOTE]
+        # atts=None → 保留服务端现有附件；显式 list 才全量替换（超限告警而非静默）
+        if atts is not None:
+            if len(atts) > MAX_ATTS_PER_NOTE:
+                log.warning('atts 超限截断: %d > %d (noteId=%s)',
+                            len(atts), MAX_ATTS_PER_NOTE, note.get('id'))
+                atts = atts[:MAX_ATTS_PER_NOTE]
         final, applied = self.store.upsert_note(note, atts)
         log.info('upsert_note 落库: id=%s rev=%s applied=%s',
                  final['id'], final['rev'], applied)

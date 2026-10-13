@@ -37,7 +37,7 @@ onMounted(() => setTimeout(() => document.getElementById('jot-search')?.focus(),
 <template>
   <div class="mx-auto flex h-full w-full max-w-2xl flex-col gap-3 overflow-y-auto px-4 pb-28 pt-3">
     <div class="sticky top-0 z-10 -mx-4 flex items-center gap-2 bg-bg-0/85 px-3 py-2 backdrop-blur-xl">
-      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" @click="pop()">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" aria-label="返回" title="返回" @click="pop()">
         <component :is="icons.ChevronLeft" :size="20" />
       </button>
       <div class="flex flex-1 items-center gap-2 rounded-full bg-bg-1 px-3.5 py-2 shadow-card">

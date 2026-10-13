@@ -9,10 +9,10 @@ export async function setup(uiCtx: UiLike) {
   setUi(uiCtx)
   initNav()
   uiCtx.registerApp({
-    id: 'jot',
+    id: 'anka-jot',
     title: '即刻',
     icon: 'notebook-pen',
-    route: '/jot',
+    route: '/anka-jot',
     component: App,
     order: 10,
     sidebar: true,
@@ -22,7 +22,7 @@ export async function setup(uiCtx: UiLike) {
   return {
     teardown() {
       stopSyncLoop()
-      uiCtx.unregisterApp('jot')
+      uiCtx.unregisterApp('anka-jot')
     },
   }
 }

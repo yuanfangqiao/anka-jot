@@ -29,7 +29,7 @@ async function exportJson() {
   exporting.value = true
   try {
     const data = {
-      app: 'jot', version: '0.1.0', exportedAt: new Date().toISOString(),
+      app: 'anka-jot', version: '0.1.0', exportedAt: new Date().toISOString(),
       notes: (await listNotes()).map(n => ({ ...n, syncState: undefined })),
       atts: (await allAtts()).map(a => ({ ...a, serverPath: a.serverPath ?? null })),
     }
@@ -85,7 +85,7 @@ async function exportJson() {
       </div>
       <div class="flex items-center justify-between py-1.5 text-[14px]">
         <span class="text-ink-0">同步状态</span>
-        <button type="button" class="cursor-pointer text-brand" @click="syncNow">
+        <button type="button" class="cursor-pointer text-brand disabled:opacity-50" :disabled="syncState.syncing" @click="syncNow">
           {{ syncState.syncing ? '同步中…' : syncState.pending ? `${syncState.pending} 项待同步` : '已同步' }}
         </button>
       </div>

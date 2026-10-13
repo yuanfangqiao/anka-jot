@@ -55,28 +55,47 @@ export function newNote(source: JotNote['source'] = 'text'): JotNote {
   }
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-/** 500ms 防抖自动存；空笔记（无标题/正文/附件）不入库 */
+/** 当前正在编辑的笔记（Detail 注册）：touchNote 合并其未保存内容，避免把编辑器新文字存回旧版 */
+export const activeNote = ref<JotNote | null>(null)
+export function setActiveNote(n: JotNote | null) { activeNote.value = n }
+
+let saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 500ms 防抖自动存（按笔记分桶，避免多笔记互相清掉定时器丢编辑）；空笔记不入库 */
 export function saveDebounced(note: JotNote, immediate = false) {
-  if (saveTimer) clearTimeout(saveTimer)
-  const run = () => void persist(note)
-  if (immediate) run()
-  else saveTimer = setTimeout(run, 500)
+  const id = note.id
+  const old = saveTimers.get(id)
+  if (old) clearTimeout(old)
+  if (immediate) {
+    saveTimers.delete(id)
+    void persist(note)
+    return
+  }
+  saveTimers.set(id, setTimeout(() => { saveTimers.delete(id); void persist(note) }, 500))
+}
+/** 立即冲刷该笔记的防抖保存（页面卸载/切换前调用） */
+export async function flushSave(note: JotNote) {
+  const t = saveTimers.get(note.id)
+  if (t) { clearTimeout(t); saveTimers.delete(note.id) }
+  await persist(note)
+}
+/** 取消该笔记尚未执行的保存（删除时调用，防止残留定时器把笔记复活） */
+export function cancelSave(noteId: string) {
+  const t = saveTimers.get(noteId)
+  if (t) { clearTimeout(t); saveTimers.delete(noteId) }
 }
 
 async function persist(note: JotNote) {
-  console.log('[jot] persist 触发', note.id, note.title)
   const atts = await db.attsOf(note.id)
   const empty = !note.title.trim() && !note.text.trim() && atts.length === 0
-  if (empty) { console.log('[jot] persist 跳过：空笔记'); return }
-  note.updatedAt = Date.now()
-  note.syncState = 'local'
-  await db.saveNote(note, true)
-  const i = notes.value.findIndex(n => n.id === note.id)
-  if (i >= 0) { notes.value[i] = { ...note } } else { notes.value.push({ ...note }) }
-  index.upsert(note, atts)
-  for (const t of note.tags) await ensureTag(t)
-  await pushThrough(note, atts)
+  if (empty || note.deleted) return
+  // 克隆后再写，避免原地改调用方（Detail）对象的 rev/syncState 引发意外 UI 变更
+  const next: JotNote = { ...note, atts, updatedAt: Date.now(), syncState: 'local' }
+  await db.saveNote(next, true)
+  const i = notes.value.findIndex(n => n.id === next.id)
+  if (i >= 0) { notes.value[i] = { ...next } } else { notes.value.push({ ...next }) }
+  index.upsert(next, atts)
+  for (const t of next.tags) await ensureTag(t)
+  await pushThrough(next, atts)
   await refreshPending()
 }
 
@@ -84,13 +103,12 @@ async function persist(note: JotNote) {
 async function pushThrough(note: JotNote, atts: JotAtt[]) {
   try {
     const r = await callJot('upsert_note', { note: stripLocal(note), atts: atts.map(stripAtt) })
-    console.log('[jot] pushThrough 结果', r)
-    if (r?.serverRev != null) {
-      note.rev = r.serverRev
-      note.syncState = 'synced'
-      await db.saveNote(note, false)
-      const i = notes.value.findIndex(n => n.id === note.id)
-      if (i >= 0) notes.value[i] = { ...note }
+    // 仅当服务端采纳了我们的版本才更新 rev/状态；applied=false 时保留本地编辑，交由同步引擎拉取裁决
+    if (r?.applied) {
+      const next = { ...note, rev: r.serverRev, syncState: 'synced' as const }
+      await db.saveNote(next, false)
+      const i = notes.value.findIndex(n => n.id === next.id)
+      if (i >= 0) notes.value[i] = { ...next }
       // 附件媒体尚未上传时保留 outbox 条目，交由同步引擎补传
       if (atts.every(a => a.serverPath)) await db.outboxDropNote(note.id)
     }
@@ -103,11 +121,13 @@ export async function togglePin(note: JotNote) {
 }
 
 export async function removeNote(note: JotNote) {
+  cancelSave(note.id) // 取消残留防抖，防止删除后笔记被 persist 复活
   const cur = await db.getNote(note.id)
   if (cur) await db.putHistory(cur)
   await db.tombstone(note.id)
   notes.value = notes.value.filter(n => n.id !== note.id)
   index.remove(note.id)
+  invalidateCover(note.id)
   try {
     await callJot('delete_note', { id: note.id })
     await db.outboxDropNote(note.id)
@@ -143,7 +163,13 @@ export async function attachAudio(noteId: string, blob: Blob, duration: number,
 
 async function touchNote(noteId: string) {
   let n = await db.getNote(noteId)
-  if (!n) n = notes.value.find(x => x.id === noteId) ?? null  // 兜底：笔记本体尚未入库时回退内存
+  const live = activeNote.value
+  if (live && live.id === noteId) {
+    // 编辑器有未保存内容：以其标题/正文/标签为准（atts 以刚写入 DB 的为准）
+    n = { ...(n ?? live), title: live.title, text: live.text, tags: [...live.tags] }
+  } else if (!n) {
+    n = notes.value.find(x => x.id === noteId) ?? null
+  }
   if (!n) return
   n.updatedAt = Date.now()
   n.syncState = 'local'
@@ -200,7 +226,11 @@ export async function coverOf(noteId: string): Promise<string | null> {
   covers.set(noteId, url)
   return url
 }
-export function invalidateCover(noteId: string) { covers.delete(noteId) }
+export function invalidateCover(noteId: string) {
+  const url = covers.get(noteId)
+  if (url) URL.revokeObjectURL(url) // 释放 object URL，防会话内泄漏
+  covers.delete(noteId)
+}
 
 export function hasAudio(atts?: JotAtt[]): boolean {
   return Boolean(atts?.some(a => a.kind === 'audio'))

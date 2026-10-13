@@ -47,11 +47,11 @@ function firstAudio(n: JotNote) { return n.atts?.find(a => a.kind === 'audio') }
     <!-- 月历 -->
     <div class="rounded-card bg-bg-1 p-4 shadow-card">
       <div class="mb-3 flex items-center justify-between">
-        <button type="button" class="cursor-pointer rounded-full p-1.5 text-ink-1 hover:bg-glass" @click="prev">
+        <button type="button" class="cursor-pointer rounded-full p-1.5 text-ink-1 hover:bg-glass" aria-label="上一月" title="上一月" @click="prev">
           <component :is="icons.ChevronLeft" :size="17" />
         </button>
         <p class="text-[15px] font-semibold">{{ year }}年{{ month + 1 }}月</p>
-        <button type="button" class="cursor-pointer rounded-full p-1.5 text-ink-1 hover:bg-glass" @click="next">
+        <button type="button" class="cursor-pointer rounded-full p-1.5 text-ink-1 hover:bg-glass" aria-label="下一月" title="下一月" @click="next">
           <component :is="icons.ChevronRight" :size="17" />
         </button>
       </div>

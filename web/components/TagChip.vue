@@ -17,6 +17,12 @@ const emit = defineEmits<{ remove: []; click: [] }>()
   >
     <span class="inline-block h-1.5 w-1.5 rounded-full" :style="{ background: color ?? '#8B7BD8' }" />
     {{ name }}
-    <span v-if="removable" class="ml-0.5 opacity-70" @click.stop="emit('remove')">×</span>
+    <span
+      v-if="removable"
+      role="button" tabindex="0" aria-label="移除标签" class="ml-0.5 opacity-70"
+      @click.stop="emit('remove')"
+      @keydown.enter.prevent.stop="emit('remove')"
+      @keydown.space.prevent.stop="emit('remove')"
+    >×</span>
   </button>
 </template>

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** Detail — 屏② 笔记详情：标题/正文、图片九宫格、音频卡、转写编辑、
  *  标签、元数据、OCR / AI 摘要 / 提取待办 / 置顶 / 删除。 */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { callJot, mediaUrl, toast, useUi, type JotAtt, type JotNote, type Seg } from '../host'
 import { pop, push } from '../lib/nav'
 import { fmtTime } from '../lib/format'
 import {
-  attachImage, ensureTag, invalidateCover, newNote, removeNote,
-  saveDebounced, tagColor, tags, togglePin, updateAtt,
+  attachImage, ensureTag, flushSave, invalidateCover, newNote, removeNote,
+  saveDebounced, setActiveNote, tagColor, tags, togglePin, updateAtt,
 } from '../state/store'
 import * as db from '../lib/db'
 import ImgGrid from '../components/ImgGrid.vue'
@@ -30,22 +30,36 @@ const albumInput = ref<HTMLInputElement>()
 const images = computed(() => atts.value.filter(a => a.kind === 'image'))
 const audios = computed(() => atts.value.filter(a => a.kind === 'audio'))
 
+let alive = true
+let focusTimer = 0
+let touched = false // 用户是否真正编辑过（打开笔记不触发保存）
+
 onMounted(async () => {
   const n = await db.getNote(props.id)
+  if (!alive) return // 已卸载：不写组件状态，避免重复 pop
   if (n) {
     note.value = n
     atts.value = await db.attsOf(n.id)
   } else if (props.fresh) {
     note.value = newNote('text'); note.value.id = props.id
   } else { pop(); return }
-  if (props.fresh) setTimeout(() => document.getElementById('jot-title')?.focus(), 60)
+  setActiveNote(note.value)
+  if (props.fresh) focusTimer = window.setTimeout(() => document.getElementById('jot-title')?.focus(), 60)
 })
 
+onBeforeUnmount(() => {
+  alive = false
+  window.clearTimeout(focusTimer)
+  setActiveNote(null)
+  if (note.value && !deleted) void flushSave(note.value) // 冲刷未保存编辑，防丢
+})
+
+// 仅在用户实际编辑后保存；打开笔记不写 updatedAt（避免纯查看触发同步/顶时间线）
 watch(() => [note.value?.title, note.value?.text], () => {
-  if (note.value) saveDebounced(note.value)
+  if (note.value && touched) saveDebounced(note.value)
 })
 
-function dirty() { if (note.value) saveDebounced(note.value) }
+function dirty() { touched = true; if (note.value) saveDebounced(note.value) }
 
 // ─── 标签 ──
 async function addTag() {
@@ -125,8 +139,11 @@ async function todos() {
   } catch { toast('AI 服务不可用', false) } finally { aiBusy.value = '' }
 }
 
+let deleted = false
+
 async function del() {
   if (!note.value || !confirm('删除这条笔记？（可从历史兜底恢复）')) return
+  deleted = true // 卸载 flush 时跳过，防止删除后笔记被复活
   await removeNote(note.value)
   pop()
 }
@@ -144,20 +161,20 @@ const metaLine = computed(() => {
   <div v-if="note" class="mx-auto flex h-full w-full max-w-2xl flex-col overflow-y-auto px-4 pb-28 pt-3">
     <!-- 顶栏 -->
     <div class="sticky top-0 z-10 -mx-4 flex items-center gap-1 bg-bg-0/85 px-3 py-2 backdrop-blur-xl">
-      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" @click="pop()">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" aria-label="返回" title="返回" @click="pop()">
         <component :is="icons.ChevronLeft" :size="20" />
       </button>
       <span class="flex-1" />
-      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" @click="togglePin(note)">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" :aria-label="note.pinned ? '取消置顶' : '置顶'" :title="note.pinned ? '取消置顶' : '置顶'" @click="togglePin(note)">
         <component :is="icons.Pin" :size="17" :class="{ 'text-brand': note.pinned }" />
       </button>
-      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" :disabled="aiBusy === 'sum'" @click="summarize">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" aria-label="AI 摘要" title="AI 摘要" :disabled="aiBusy === 'sum'" @click="summarize">
         <component :is="icons.Sparkles" :size="17" />
       </button>
-      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" :disabled="aiBusy === 'todo'" @click="todos">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" aria-label="提取待办" title="提取待办" :disabled="aiBusy === 'todo'" @click="todos">
         <component :is="icons.ListChecks" :size="17" />
       </button>
-      <button type="button" class="cursor-pointer rounded-full p-2 text-err/80 hover:bg-glass" @click="del">
+      <button type="button" class="cursor-pointer rounded-full p-2 text-err/80 hover:bg-glass" aria-label="删除笔记" title="删除笔记" @click="del">
         <component :is="icons.Trash2" :size="17" />
       </button>
     </div>
@@ -167,10 +184,12 @@ const metaLine = computed(() => {
     <input
       id="jot-title" v-model="note.title" placeholder="标题"
       class="mt-2 w-full bg-transparent text-[22px] font-bold text-ink-0 outline-none placeholder:text-ink-2/60"
+      @input="touched = true"
     />
     <textarea
       v-model="note.text" placeholder="开始记录… 支持 - [ ] 待办、@标签"
       class="mt-2 min-h-40 w-full flex-1 resize-none bg-transparent text-[15px] leading-6 text-ink-0 outline-none placeholder:text-ink-2/60"
+      @input="touched = true"
     />
 
     <!-- AI 结果 -->

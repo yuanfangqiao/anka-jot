@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** AudioCard — 音频附件卡：播放/暂停 + 波形进度 + 时长。 */
 import { onUnmounted, ref } from 'vue'
-import { mediaUrl, useUi, type JotAtt } from '../host'
+import { mediaUrl, toast, useUi, type JotAtt } from '../host'
 import * as db from '../lib/db'
 import { fmtDur } from '../lib/format'
 import Waveform from './Waveform.vue'
@@ -27,8 +27,14 @@ async function toggle() {
     el.onended = () => { playing.value = false; progress.value = 0; cur.value = 0 }
     el.onpause = () => { playing.value = false }
     el.onplay = () => { playing.value = true }
+    el.onerror = () => { playing.value = false; toast('音频加载失败', false) }
   }
-  await el.play()
+  try {
+    await el.play()
+  } catch {
+    playing.value = false
+    toast('音频播放失败', false)
+  }
 }
 
 onUnmounted(() => { el?.pause(); el = null })
@@ -39,6 +45,7 @@ onUnmounted(() => { el?.pause(); el = null })
     <button
       type="button"
       class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-brand text-white transition-transform active:scale-90"
+      :aria-label="playing ? '暂停' : '播放语音'"
       @click="toggle"
     >
       <component :is="playing ? icons.Pause : icons.Play" :size="18" />
