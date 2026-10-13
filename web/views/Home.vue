@@ -31,22 +31,28 @@ const activeTag = ref('')
 const visibleFlow = computed(() =>
   activeTag.value ? flow.value.filter(n => n.tags.includes(activeTag.value)) : flow.value)
 
-/** 时间线按创建日分组：今天 / 昨天 / 10月3日…（排序已按 createdAt，分组必然连续） */
+/** 时间线按创建日分组：今天 / 昨天 / 10月3日…（排序已按 createdAt，分组必然连续）。
+ *  双列手动拆分（短列优先），不依赖 CSS columns —— 部分宿主构建不含该工具类 */
 const grouped = computed(() => {
-  const gs: { label: string; ref: number; notes: JotNote[] }[] = []
+  const gs: { label: string; ref: number; colA: JotNote[]; colB: JotNote[] }[] = []
   for (const n of visibleFlow.value) {
     const last = gs[gs.length - 1]
-    if (last && sameDay(last.ref, n.createdAt)) last.notes.push(n)
-    else gs.push({ label: dayLabelFull(n.createdAt), ref: n.createdAt, notes: [n] })
+    if (last && sameDay(last.ref, n.createdAt)) {
+      ;(last.colA.length <= last.colB.length ? last.colA : last.colB).push(n)
+    } else {
+      gs.push({ label: dayLabelFull(n.createdAt), ref: n.createdAt, colA: [n], colB: [] })
+    }
   }
   return gs
 })
+const pinnedA = computed(() => pinned.value.filter((_, i) => i % 2 === 0))
+const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
 </script>
 
 <template>
   <div class="relative mx-auto flex h-full w-full max-w-2xl flex-col pt-2">
     <!-- 滚动区（底部留白避让贴底工具条） -->
-    <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-[72px]">
+    <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-20">
       <!-- 搜索栏 -->
       <button
         type="button"
@@ -73,23 +79,33 @@ const grouped = computed(() => {
       >{{ t.name }}</button>
     </div>
 
-    <!-- 置顶（双列瀑布流） -->
+    <!-- 置顶（双列） -->
     <section v-if="pinned.length">
       <p class="mb-1.5 px-1 text-[11px] font-medium tracking-wide text-ink-2">置顶</p>
-      <div class="columns-2 gap-2.5">
-        <NoteCard v-for="n in pinned" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
+      <div class="flex gap-2.5">
+        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
+          <NoteCard v-for="n in pinnedA" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
+        </div>
+        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
+          <NoteCard v-for="n in pinnedB" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
+        </div>
       </div>
     </section>
 
-    <!-- 时间线（按天分组 + 双列瀑布流，日期分割线） -->
+    <!-- 时间线（按天分组 + 手动双列瀑布流，日期分割线） -->
     <section v-for="(g, gi) in grouped" :key="g.label + gi">
       <div class="mb-2 flex items-center gap-3 px-1">
-        <span class="h-px flex-1 bg-black/[0.08]" />
+        <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
         <span class="text-[11px] font-medium tracking-wide text-ink-2">{{ g.label }}</span>
-        <span class="h-px flex-1 bg-black/[0.08]" />
+        <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
       </div>
-      <div class="columns-2 gap-2.5">
-        <NoteCard v-for="n in g.notes" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
+      <div class="flex gap-2.5">
+        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
+          <NoteCard v-for="n in g.colA" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
+        </div>
+        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
+          <NoteCard v-for="n in g.colB" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
+        </div>
       </div>
     </section>
     <Empty
@@ -100,12 +116,22 @@ const grouped = computed(() => {
     />
     </div>
 
-    <!-- 四入口：全宽贴底细长工具条（分段控件质感），列表从其下方滚过 -->
-    <footer class="absolute inset-x-0 bottom-0 bg-white/75 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.10)] backdrop-blur-xl saturate-150">
-      <div class="grid grid-cols-4 divide-x divide-black/[0.06]">
+    <!-- 四入口：全宽贴底细长工具条（分段控件质感），列表从其下方滚过。
+         关键视觉用内联样式：宿主构建可能未包含任意值/新工具类 -->
+    <footer
+      class="absolute inset-x-0 bottom-0"
+      :style="{
+        background: 'rgba(255, 255, 255, 0.78)',
+        backdropFilter: 'blur(20px) saturate(1.5)',
+        WebkitBackdropFilter: 'blur(20px) saturate(1.5)',
+        boxShadow: '0 -8px 24px -12px rgba(0, 0, 0, 0.10)',
+      }"
+    >
+      <div class="grid grid-cols-4">
         <button
-          v-for="q in QUICK" :key="q.kind" type="button"
+          v-for="(q, qi) in QUICK" :key="q.kind" type="button"
           class="flex cursor-pointer flex-col items-center gap-1 py-2.5 transition-all duration-micro active:scale-95"
+          :style="qi > 0 ? { borderLeft: '1px solid rgba(60, 54, 44, 0.08)' } : undefined"
           :class="'main' in q && q.main ? 'text-brand' : 'text-ink-2'"
           @click="emit('create', q.kind)"
         >

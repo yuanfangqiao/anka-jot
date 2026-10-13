@@ -98,20 +98,21 @@ async function onAlbum(files: FileList | null) {
 <style>
 /* Jot 主题：按设计稿覆盖宿主 token（仅 .jot-root 作用域内生效，不影响宿主） */
 .jot-root {
-  --bg-0: #f6f2e9;
-  --bg-1: #ffffff;
-  --bg-2: #efe9dc;
-  --text-0: #2b2925;
-  --text-1: #6a665c;
-  --text-2: #a39e90;
-  --primary: #2f3b57;
-  --primary-2: #58678c;
-  --cyan: #7b6cf0;
-  --ok: #3d9e6b;
-  --warn: #d99a2b;
-  --err: #d94f4f;
-  --line: rgb(60 54 44 / 0.08);
-  --glass: rgb(60 54 44 / 0.045);
+  /* !important：宿主深色主题会在更晚的级联里覆盖插件变量，导致手机端配色错乱 */
+  --bg-0: #f6f2e9 !important;
+  --bg-1: #ffffff !important;
+  --bg-2: #efe9dc !important;
+  --text-0: #2b2925 !important;
+  --text-1: #6a665c !important;
+  --text-2: #a39e90 !important;
+  --primary: #2f3b57 !important;
+  --primary-2: #58678c !important;
+  --cyan: #7b6cf0 !important;
+  --ok: #3d9e6b !important;
+  --warn: #d99a2b !important;
+  --err: #d94f4f !important;
+  --line: rgb(60 54 44 / 0.08) !important;
+  --glass: rgb(60 54 44 / 0.045) !important;
   color-scheme: light;
 }
 /* 设计稿的柔和卡片阴影（宿主 shadow-card 偏暗） */

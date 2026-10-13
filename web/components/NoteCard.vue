@@ -49,7 +49,7 @@ const body = computed(() => {
 
 <template>
   <article
-    class="mb-2.5 break-inside-avoid cursor-pointer overflow-hidden rounded-xl bg-bg-1 shadow-card transition-transform duration-micro active:scale-[0.97]"
+    class="cursor-pointer overflow-hidden rounded-xl bg-bg-1 shadow-card transition-transform duration-micro active:scale-[0.97]"
     :class="{ 'opacity-60': note.deleted }"
     @click="emit('open')"
   >
