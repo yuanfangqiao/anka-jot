@@ -28,9 +28,11 @@ export function sharedAudioContext(): AudioContext {
   return sharedAC
 }
 
-/** 首次 getUserMedia，之后复用；全部 track ended（后台被杀等）时自动重建 */
+/** 首次 getUserMedia，之后复用；track ended（后台被杀）或 muted
+ *  （iOS PWA 前后台切换后常保持 live 但无声）时自动重建 */
 export function acquireMicStream(): Promise<MediaStream> {
-  const alive = micStream && micStream.getTracks().some(t => t.readyState === 'live')
+  const alive = micStream && micStream.getTracks().some(
+    t => t.readyState === 'live' && !t.muted)
   if (alive) return Promise.resolve(micStream!)
   if (!micStreamPromise) {
     micStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true })
