@@ -18,6 +18,25 @@ import OfflineBanner from './components/OfflineBanner.vue'
 const ui = useUi()
 const icons = ui.icons
 
+/** 设计稿奶油浅色调色板（内联注入，见模板根节点：不依赖宿主 Tailwind/主题变量） */
+const PALETTE = {
+  '--bg-0': '#f6f2e9',
+  '--bg-1': '#ffffff',
+  '--bg-2': '#efe9dc',
+  '--text-0': '#2b2925',
+  '--text-1': '#6a665c',
+  '--text-2': '#a39e90',
+  '--primary': '#2f3b57',
+  '--primary-2': '#58678c',
+  '--cyan': '#7b6cf0',
+  '--ok': '#3d9e6b',
+  '--warn': '#d99a2b',
+  '--err': '#d94f4f',
+  '--line': 'rgb(60 54 44 / 0.08)',
+  '--glass': 'rgb(60 54 44 / 0.045)',
+  colorScheme: 'light',
+} as const
+
 const VIEWS: Record<string, any> = {
   home: Home, note: Detail, record: RecordView, camera: CameraView,
   calendar: Calendar, discover: Discover, search: Search, settings: Settings,
@@ -60,7 +79,11 @@ async function onAlbum(files: FileList | null) {
 </script>
 
 <template>
-  <div class="jot-root relative flex h-full w-full flex-col overflow-hidden bg-bg-0 text-ink-0">
+  <!-- 调色板以内联变量注入根节点：inline style 优先级最高，宿主主题/样式表顺序都覆盖不掉 -->
+  <div
+    class="jot-root relative flex h-full w-full flex-col overflow-hidden bg-bg-0 text-ink-0"
+    :style="PALETTE"
+  >
     <!-- 顶部导航（取代底部 Tab，避开宿主 dock） -->
     <header v-if="showChrome" class="z-20 shrink-0 px-4 pt-3">
       <div class="mx-auto flex w-full max-w-2xl items-center gap-3">

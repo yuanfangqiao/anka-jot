@@ -34,9 +34,11 @@ export class JotRecorder {
     this.mr.start(1000) // 分片：崩溃最多丢 1s
     this.t0 = Date.now()
 
-    // 实时波形采样
+    // 实时波形采样（iOS Safari 需 webkitAudioContext 兜底；挂起态要 resume 才有数据）
     try {
-      this.ac = new AudioContext()
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+      this.ac = new Ctx()
+      void this.ac.resume?.().catch(() => {})
       const src = this.ac.createMediaStreamSource(this.stream)
       const an = this.ac.createAnalyser()
       an.fftSize = 512

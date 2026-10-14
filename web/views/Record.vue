@@ -4,6 +4,8 @@ import { onUnmounted, ref } from 'vue'
 import { useUi, toast, type Seg, type JotNote } from '../host'
 import { JotRecorder } from '../lib/audio'
 import { JotSpeech, speechSupported } from '../lib/speech'
+import { needsInstallHint } from '../lib/platform'
+import * as db from '../lib/db'
 import { pop } from '../lib/nav'
 import { fmtDur } from '../lib/format'
 import { attachAudio, newNote, saveDebounced, settings } from '../state/store'
@@ -26,8 +28,19 @@ let sp: JotSpeech | null = null
 let timer = 0
 let realNoteId = props.noteId ?? ''
 
+/** iOS 非安装态：授权为会话级，提示一次「安装到主屏后只问一次」 */
+async function hintInstallOnce() {
+  if (!needsInstallHint()) return
+  try {
+    if (await db.kvGet<boolean>('iosInstallHinted')) return
+    await db.kvSet('iosInstallHinted', true)
+    toast('提示：Safari 分享 → 添加到主屏幕，麦克风就只需授权一次')
+  } catch { /* 提示失败不影响录音 */ }
+}
+
 async function start() {
   error.value = ''
+  void hintInstallOnce()
   try {
     rec = new JotRecorder()
     await rec.start()

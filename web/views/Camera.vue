@@ -19,6 +19,11 @@ const scanMode = ref(false)
 /** 镜像预览：默认开（自拍视角更自然）；扫描模式强制关（OCR 需正向文字） */
 const mirrored = ref(true)
 watch(scanMode, v => { if (v) mirrored.value = false })
+
+/** 移动端走系统原生拍摄（<input capture>）：不做 web 取景，规避 iOS 每次重复授权，画质也更好 */
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+const nativeMode = ref(isMobile)
+const fileInput = ref<HTMLInputElement>()
 const shots = ref<JotAtt[]>([])
 const shotThumbs = ref<string[]>([])
 watch(shots, async ss => {
@@ -83,6 +88,28 @@ async function shutter() {
   }
 }
 
+/** 移动端：系统相机拍完回来的文件（可多选/连拍） */
+async function pickNative(files: FileList | null) {
+  if (!files?.length) return
+  busy.value = true
+  try {
+    let fresh: JotNote | null = null
+    if (!realNoteId) {
+      const n = newNote('camera')
+      realNoteId = n.id
+      fresh = n
+    }
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith('image/')) continue
+      const att = await attachImage(realNoteId, f, scanMode.value)
+      shots.value = [...shots.value, att]
+    }
+    if (fresh && shots.value.length) saveDebounced(fresh, true)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function finish() {
   stream?.getTracks().forEach(t => t.stop()); stream = null
   if (realNoteId) {
@@ -92,7 +119,14 @@ async function finish() {
   } else pop()
 }
 
-onMounted(openCamera)
+onMounted(() => {
+  if (nativeMode.value) {
+    // 直接唤起系统相机；被浏览器拦截时由页面按钮兜底
+    requestAnimationFrame(() => { try { fileInput.value?.click() } catch { /* 需用户手势 */ } })
+  } else {
+    void openCamera()
+  }
+})
 onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
 </script>
 
@@ -109,7 +143,7 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
         :class="scanMode ? 'bg-brand text-white' : 'bg-white/15'"
         @click="scanMode = !scanMode"
       >{{ scanMode ? '扫描模式' : '拍照模式' }}</button>
-      <div class="flex gap-2">
+      <div v-if="!nativeMode" class="flex gap-2">
         <button
           type="button"
           class="cursor-pointer rounded-full p-2 backdrop-blur transition-colors"
@@ -130,11 +164,22 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
       </div>
     </div>
 
-    <!-- 取景器 -->
+    <!-- 取景器（桌面）/ 原生拍摄面板（移动端） -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
-      <video ref="video" playsinline muted class="h-full w-full object-cover transition-transform" :style="{ transform: mirrored ? 'scaleX(-1)' : 'none' }" />
-      <!-- 扫描参考框 -->
-      <div v-if="scanMode" class="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <div v-if="nativeMode" class="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+        <component :is="icons.Camera" :size="34" class="text-white/70" />
+        <p class="text-[13px] leading-6 text-white/80">
+          使用系统相机拍摄{{ scanMode ? '（扫描模式：对齐文档边缘，拍完可提取文字）' : '' }}
+        </p>
+        <button
+          type="button"
+          class="cursor-pointer rounded-full bg-white px-5 py-2.5 text-[13px] font-medium text-black transition-transform active:scale-95"
+          @click="fileInput?.click()"
+        >打开系统相机</button>
+      </div>
+      <video v-else ref="video" playsinline muted class="h-full w-full object-cover transition-transform" :style="{ transform: mirrored ? 'scaleX(-1)' : 'none' }" />
+      <!-- 扫描参考框（仅实时取景模式） -->
+      <div v-if="scanMode && !nativeMode" class="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div class="relative h-[70%] w-[82%] rounded-lg border-2 border-dashed border-[#3ddc84]/80">
           <span class="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl border-l-4 border-t-4 border-[#3ddc84]" />
           <span class="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr border-r-4 border-t-4 border-[#3ddc84]" />
@@ -158,6 +203,19 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
         <span v-if="shots.length > 3" class="text-[12px] text-white/80">×{{ shots.length }}</span>
       </div>
       <button
+        v-if="nativeMode"
+        type="button"
+        class="relative h-[72px] w-[72px] cursor-pointer rounded-full border-[5px] border-white transition-transform active:scale-90"
+        :class="{ 'pointer-events-none opacity-40': busy }"
+        aria-label="打开系统相机"
+        @click="fileInput?.click()"
+      >
+        <span class="absolute inset-[5px] flex items-center justify-center rounded-full bg-white">
+          <component :is="icons.Camera" :size="26" class="text-black" />
+        </span>
+      </button>
+      <button
+        v-else
         type="button"
         class="relative h-[72px] w-[72px] cursor-pointer rounded-full border-[5px] border-white transition-transform active:scale-90"
         :class="{ 'pointer-events-none opacity-40': busy }"
@@ -173,5 +231,11 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
         @click="finish"
       >完成</button>
     </div>
+
+    <!-- 移动端：系统相机入口（capture=environment 直接唤起后摄） -->
+    <input
+      ref="fileInput" type="file" accept="image/*" capture="environment" multiple class="hidden"
+      @change="pickNative(($event.target as HTMLInputElement).files)"
+    />
   </div>
 </template>
