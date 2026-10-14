@@ -49,7 +49,7 @@ const body = computed(() => {
 
 <template>
   <article
-    class="cursor-pointer overflow-hidden rounded-xl bg-bg-1 shadow-card transition-transform duration-micro active:scale-[0.97]"
+    class="jot-press-strong cursor-pointer overflow-hidden rounded-xl bg-bg-1 shadow-card duration-micro"
     :class="{ 'opacity-60': note.deleted }"
     @click="emit('open')"
   >
@@ -57,28 +57,28 @@ const body = computed(() => {
     <img v-if="cover" :src="cover" alt="" class="w-full" loading="lazy" />
 
     <div class="p-2.5">
-      <h3 class="line-clamp-2 text-[13.5px] font-semibold leading-snug text-ink-0">
-        <component v-if="note.pinned" :is="icons.Pin" :size="12" class="mr-0.5 inline-block align-[-1px] text-brand" />{{ title }}
+      <h3 class="jot-clamp-2 jot-fs-135 font-semibold leading-snug text-ink-0">
+        <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
       </h3>
 
       <!-- 迷你波形 / 摘要（无封面时多露几行，像小红书的文字卡） -->
-      <div v-if="miniPeaks" class="mt-1.5 flex h-4 items-end gap-[2.5px]">
+      <div v-if="miniPeaks" class="jot-wave mt-1.5 h-4">
         <span
           v-for="(p, i) in miniPeaks" :key="i"
-          class="w-[3px] rounded-full bg-brand-cyan"
+          class="jot-wave-bar bg-brand-cyan"
           :style="{ height: Math.max(2, p * 16) + 'px', opacity: 0.45 + p * 0.55 }"
         />
       </div>
       <p
         v-else-if="body"
-        class="mt-1 text-[12px] leading-[1.45] text-ink-1"
-        :class="cover ? 'line-clamp-2' : 'line-clamp-5'"
+        class="jot-fs-12 jot-leading-145 mt-1 text-ink-1"
+        :class="cover ? 'jot-clamp-2' : 'jot-clamp-5'"
       >{{ body }}</p>
 
       <!-- 底部：来源 + 时间 -->
       <div class="mt-2 flex items-center gap-1 text-ink-2">
         <component :is="icons[SRC_ICON[note.source] ?? 'Type']" :size="11" :style="{ color: SRC_HUE[note.source] }" />
-        <span class="text-[10px]">{{ showDay ? dayLabel(note.createdAt) + ' ' : '' }}{{ fmtClock(note.createdAt) }}</span>
+        <span class="jot-fs-10">{{ showDay ? dayLabel(note.createdAt) + ' ' : '' }}{{ fmtClock(note.createdAt) }}</span>
         <span class="flex-1" />
         <span
           v-if="note.syncState !== 'synced'"

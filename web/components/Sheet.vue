@@ -15,8 +15,8 @@ const ITEMS = [
 
 <template>
   <Teleport to="body">
-    <div class="fixed inset-0 z-50 flex items-end justify-center bg-black/45 backdrop-blur-[2px]" @click="emit('close')">
-      <div class="w-full max-w-md animate-fade-up p-4 pb-[max(1rem,env(safe-area-inset-bottom))]" @click.stop>
+    <div class="fixed inset-0 z-50 flex items-end justify-center bg-black/45 jot-overlay-blur" @click="emit('close')">
+      <div class="w-full max-w-md animate-fade-up p-4 jot-safe-bottom" @click.stop>
         <div class="grid grid-cols-4 gap-2 rounded-shell bg-bg-1 p-3 shadow-card">
           <button
             v-for="it in ITEMS" :key="it.kind" type="button"
@@ -29,8 +29,8 @@ const ITEMS = [
             >
               <component :is="icons[it.icon]" :size="21" />
             </span>
-            <span class="text-[13px] font-medium text-ink-0">{{ it.label }}</span>
-            <span class="text-[10px] text-ink-2">{{ it.desc }}</span>
+            <span class="jot-fs-13 font-medium text-ink-0">{{ it.label }}</span>
+            <span class="jot-fs-10 text-ink-2">{{ it.desc }}</span>
           </button>
         </div>
       </div>

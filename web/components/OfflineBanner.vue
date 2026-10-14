@@ -18,7 +18,7 @@ const ok = computed(() => syncState.online && syncState.pending === 0 && syncSta
 <template>
   <div
     v-if="show"
-    class="flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] font-medium"
+    class="flex items-center gap-2 rounded-xl px-3 py-2 jot-fs-12 font-medium"
     :class="ok ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'"
   >
     <component :is="syncState.online ? icons.CloudUpload : icons.CloudOff" :size="14" />
@@ -26,7 +26,7 @@ const ok = computed(() => syncState.online && syncState.pending === 0 && syncSta
     <button
       v-if="syncState.online && syncState.pending > 0"
       type="button"
-      class="cursor-pointer rounded-lg bg-warn/20 px-2 py-1 text-[11px] transition-transform active:scale-95"
+      class="cursor-pointer rounded-lg bg-warn/20 px-2 py-1 jot-fs-11 transition-transform active:scale-95"
       :disabled="syncState.syncing"
       @click="syncNow"
     >{{ syncState.syncing ? '同步中…' : '同步' }}</button>

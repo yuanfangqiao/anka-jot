@@ -142,13 +142,13 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
 <template>
   <div class="absolute inset-0 z-40 flex flex-col bg-black text-white">
     <!-- 顶栏 -->
-    <div class="flex items-center justify-between p-4 text-[13px]">
+    <div class="flex items-center justify-between p-4 jot-fs-13">
       <button type="button" class="cursor-pointer rounded-full bg-white/15 p-2 backdrop-blur" @click="finish">
         <component :is="icons.X" :size="18" />
       </button>
       <button
         type="button"
-        class="cursor-pointer rounded-full px-3 py-1.5 text-[12px] backdrop-blur transition-colors"
+        class="cursor-pointer rounded-full px-3 py-1.5 jot-fs-12 backdrop-blur transition-colors"
         :class="scanMode ? 'bg-brand text-white' : 'bg-white/15'"
         @click="scanMode = !scanMode"
       >{{ scanMode ? '扫描模式' : '拍照模式' }}</button>
@@ -156,7 +156,7 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
         <button
           v-if="likelyRealMobile()"
           type="button"
-          class="cursor-pointer rounded-full bg-white/15 px-3 py-1.5 text-[12px] backdrop-blur"
+          class="cursor-pointer rounded-full bg-white/15 px-3 py-1.5 jot-fs-12 backdrop-blur"
           title="改用系统相机拍摄（免网页授权）"
           @click="useNative"
         >原生拍摄</button>
@@ -184,32 +184,32 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <div v-if="nativeMode" class="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
         <component :is="icons.Camera" :size="34" class="text-white/70" />
-        <p class="text-[13px] leading-6 text-white/80">
+        <p class="jot-fs-13 leading-6 text-white/80">
           使用系统相机拍摄{{ scanMode ? '（扫描模式：对齐文档边缘，拍完可提取文字）' : '' }}
         </p>
         <button
           type="button"
-          class="cursor-pointer rounded-full bg-white px-5 py-2.5 text-[13px] font-medium text-black transition-transform active:scale-95"
+          class="cursor-pointer rounded-full bg-white px-5 py-2.5 jot-fs-13 font-medium text-black transition-transform active:scale-95"
           @click="fileInput?.click()"
         >打开系统相机</button>
         <button
           type="button"
-          class="cursor-pointer rounded-full bg-white/15 px-4 py-2 text-[12px] text-white/90 backdrop-blur transition-transform active:scale-95"
+          class="cursor-pointer rounded-full bg-white/15 px-4 py-2 jot-fs-12 text-white/90 backdrop-blur transition-transform active:scale-95"
           @click="useLive"
         >改用实时取景</button>
       </div>
       <video v-else ref="video" playsinline muted class="h-full w-full object-cover transition-transform" :style="{ transform: mirrored ? 'scaleX(-1)' : 'none' }" />
       <!-- 扫描参考框（仅实时取景模式） -->
       <div v-if="scanMode && !nativeMode" class="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div class="relative h-[70%] w-[82%] rounded-lg border-2 border-dashed border-[#3ddc84]/80">
-          <span class="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl border-l-4 border-t-4 border-[#3ddc84]" />
-          <span class="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr border-r-4 border-t-4 border-[#3ddc84]" />
-          <span class="absolute -bottom-0.5 -left-0.5 h-5 w-5 rounded-bl border-b-4 border-l-4 border-[#3ddc84]" />
-          <span class="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-br border-b-4 border-r-4 border-[#3ddc84]" />
-          <p class="absolute -bottom-8 w-full text-center text-[12px] text-white/80">对齐文档边缘，拍摄后可提取文本</p>
+        <div class="jot-scan-frame">
+          <span class="jot-scan-corner jot-scan-corner-tl" />
+          <span class="jot-scan-corner jot-scan-corner-tr" />
+          <span class="jot-scan-corner jot-scan-corner-bl" />
+          <span class="jot-scan-corner jot-scan-corner-br" />
+          <p class="absolute -bottom-8 w-full text-center jot-fs-12 text-white/80">对齐文档边缘，拍摄后可提取文本</p>
         </div>
       </div>
-      <div v-if="error" class="absolute inset-0 flex items-center justify-center bg-black/80 p-8 text-center text-[13px] leading-6">
+      <div v-if="error" class="absolute inset-0 flex items-center justify-center bg-black/80 p-8 text-center jot-fs-13 leading-6">
         {{ error }}
       </div>
     </div>
@@ -221,33 +221,33 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
           v-for="(u, i) in shotThumbs" :key="i" :src="u" alt=""
           class="h-12 w-12 rounded-md object-cover"
         />
-        <span v-if="shots.length > 3" class="text-[12px] text-white/80">×{{ shots.length }}</span>
+        <span v-if="shots.length > 3" class="jot-fs-12 text-white/80">×{{ shots.length }}</span>
       </div>
       <button
         v-if="nativeMode"
         type="button"
-        class="relative h-[72px] w-[72px] cursor-pointer rounded-full border-[5px] border-white transition-transform active:scale-90"
+        class="jot-shutter jot-shutter-native"
         :class="{ 'pointer-events-none opacity-40': busy }"
         aria-label="打开系统相机"
         @click="fileInput?.click()"
       >
-        <span class="absolute inset-[5px] flex items-center justify-center rounded-full bg-white">
-          <component :is="icons.Camera" :size="26" class="text-black" />
+        <span class="jot-shutter-inner">
+          <component :is="icons.Camera" :size="26" />
         </span>
       </button>
       <button
         v-else
         type="button"
-        class="relative h-[72px] w-[72px] cursor-pointer rounded-full border-[5px] border-white transition-transform active:scale-90"
+        class="jot-shutter"
         :class="{ 'pointer-events-none opacity-40': busy }"
         aria-label="快门"
         @click="shutter"
       >
-        <span class="absolute inset-[5px] rounded-full bg-white" />
+        <span class="jot-shutter-inner" />
       </button>
       <button
         type="button"
-        class="w-16 cursor-pointer rounded-full bg-brand px-3 py-2 text-[13px] font-medium disabled:opacity-40"
+        class="w-16 cursor-pointer rounded-full bg-brand px-3 py-2 jot-fs-13 font-medium disabled:opacity-40"
         :disabled="!shots.length"
         @click="finish"
       >完成</button>

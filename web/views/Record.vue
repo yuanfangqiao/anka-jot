@@ -53,7 +53,9 @@ async function start() {
       sp.start(0)
     }
   } catch (e: any) {
-    error.value = '无法使用麦克风：' + (e?.message ?? '权限被拒绝')
+    // 透出具体错误（iOS 二次录音失败等场景可诊断），不再吞掉错误名
+    const detail = [e?.name, e?.message].filter(Boolean).join(' ')
+    error.value = '无法使用麦克风：' + (detail || '权限被拒绝')
     rec = null
   }
 }
@@ -91,7 +93,7 @@ onUnmounted(() => {
       <button type="button" class="cursor-pointer rounded-full bg-glass p-2" @click="recording ? stop() : pop()">
         <component :is="icons.X" :size="18" />
       </button>
-      <span class="text-[13px] text-ink-2">{{ canSpeech ? '实时转写中' : '仅录音（此浏览器不支持实时转写）' }}</span>
+      <span class="jot-fs-13 text-ink-2">{{ canSpeech ? '实时转写中' : '仅录音（此浏览器不支持实时转写）' }}</span>
       <span class="w-9" />
     </div>
 
@@ -100,13 +102,13 @@ onUnmounted(() => {
       <div class="w-full max-w-md">
         <Waveform :peaks="peaks" :live="recording" :height="64" />
       </div>
-      <p v-if="error" class="max-w-sm text-center text-[12px] leading-5 text-err">{{ error }}</p>
+      <p v-if="error" class="max-w-sm text-center jot-fs-12 leading-5 text-err">{{ error }}</p>
     </div>
 
     <!-- 实时转写面板 -->
-    <div v-if="segs.length || interim" class="max-h-[38%] overflow-y-auto rounded-t-shell bg-bg-1 p-5 shadow-card">
-      <p class="mb-2 text-[11px] font-medium tracking-wide text-ink-2">实时转写</p>
-      <p class="text-[14px] leading-6 text-ink-0">
+    <div v-if="segs.length || interim" class="jot-transcript-maxh overflow-y-auto rounded-t-shell bg-bg-1 p-5 shadow-card">
+      <p class="mb-2 jot-fs-11 font-medium tracking-wide text-ink-2">实时转写</p>
+      <p class="jot-fs-14 leading-6 text-ink-0">
         <span v-for="(s, i) in segs" :key="i">{{ s.text }} </span>
         <span class="text-ink-2">{{ interim }}</span>
       </p>
@@ -116,13 +118,13 @@ onUnmounted(() => {
       <span class="w-14" />
       <button
         type="button"
-        class="flex h-[72px] w-[72px] cursor-pointer items-center justify-center rounded-full transition-transform active:scale-90"
+        class="jot-rec-btn"
         :class="recording ? 'bg-err' : 'bg-brand'"
         @click="recording ? stop() : start()"
       >
         <component :is="recording ? icons.Square : icons.Mic" :size="26" class="text-white" />
       </button>
-      <span class="w-14 text-center text-[12px] text-ink-2">{{ recording ? '停止' : '开始' }}</span>
+      <span class="w-14 text-center jot-fs-12 text-ink-2">{{ recording ? '停止' : '开始' }}</span>
     </div>
   </div>
 </template>

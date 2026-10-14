@@ -56,7 +56,7 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
       <!-- 搜索栏 -->
       <button
         type="button"
-        class="flex w-full cursor-text items-center gap-2 rounded-full bg-bg-1 px-4 py-2.5 text-left text-[13px] text-ink-2 shadow-card"
+        class="flex w-full cursor-text items-center gap-2 rounded-full bg-bg-1 px-4 py-2.5 text-left jot-fs-13 text-ink-2 shadow-card"
         @click="push('search')"
       >
         <component :is="icons.Search" :size="15" />
@@ -67,13 +67,13 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
     <div v-if="tags.length" class="flex gap-1.5 overflow-x-auto py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <button
         type="button"
-        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-[11.5px] transition-colors"
+        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
         :class="!activeTag ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
         @click="activeTag = ''"
       >全部</button>
       <button
         v-for="t in tags.slice(0, 12)" :key="t.name" type="button"
-        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-[11.5px] transition-colors"
+        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
         :class="activeTag === t.name ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
         @click="activeTag = activeTag === t.name ? '' : t.name"
       >{{ t.name }}</button>
@@ -81,7 +81,7 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
 
     <!-- 置顶（双列） -->
     <section v-if="pinned.length">
-      <p class="mb-1.5 px-1 text-[11px] font-medium tracking-wide text-ink-2">置顶</p>
+      <p class="mb-1.5 px-1 jot-fs-11 font-medium tracking-wide text-ink-2">置顶</p>
       <div class="flex gap-2.5">
         <div class="flex min-w-0 flex-1 flex-col gap-2.5">
           <NoteCard v-for="n in pinnedA" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
@@ -96,7 +96,7 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
     <section v-for="(g, gi) in grouped" :key="g.label + gi">
       <div class="mb-2 flex items-center gap-3 px-1">
         <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
-        <span class="text-[11px] font-medium tracking-wide text-ink-2">{{ g.label }}</span>
+        <span class="jot-fs-11 font-medium tracking-wide text-ink-2">{{ g.label }}</span>
         <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
       </div>
       <div class="flex gap-2.5">
@@ -136,7 +136,7 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
           @click="emit('create', q.kind)"
         >
           <component :is="icons[q.icon]" :size="22" :stroke-width="1.8" />
-          <span class="text-[10px] font-medium leading-tight">{{ q.label }}</span>
+          <span class="jot-fs-10 font-medium leading-tight">{{ q.label }}</span>
         </button>
       </div>
     </footer>

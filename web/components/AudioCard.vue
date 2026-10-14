@@ -52,7 +52,7 @@ onUnmounted(() => { el?.pause(); el = null })
     </button>
     <div class="min-w-0 flex-1">
       <Waveform :peaks="att.peaks ?? []" :progress="progress" :height="34" />
-      <div class="mt-1 flex justify-between text-[11px] text-ink-2">
+      <div class="mt-1 flex justify-between jot-fs-11 text-ink-2">
         <span>{{ fmtDur(cur) }}</span>
         <span>{{ fmtDur(att.duration) }}</span>
       </div>

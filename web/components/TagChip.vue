@@ -7,7 +7,7 @@ const emit = defineEmits<{ remove: []; click: [] }>()
 <template>
   <button
     type="button"
-    class="inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium transition-all duration-micro active:scale-95"
+    class="inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 jot-fs-115 font-medium transition-all duration-micro active:scale-95"
     :style="{
       background: (color ?? '#8B7BD8') + (active ? '33' : '1c'),
       color: color ?? '#8B7BD8',

@@ -3,10 +3,13 @@ import { setUi, type UiLike } from './host'
 import { initNav } from './lib/nav'
 import { initStore } from './state/store'
 import { startSyncLoop, stopSyncLoop } from './lib/sync'
+import { releaseMic } from './lib/audio'
+import { injectUiCss, removeUiCss } from './lib/ui.css'
 import App from './App.vue'
 
 export async function setup(uiCtx: UiLike) {
   setUi(uiCtx)
+  injectUiCss() // 插件自带语义样式（不依赖宿主 Tailwind 构建是否包含新类）
   initNav()
   uiCtx.registerApp({
     id: 'anka-jot',
@@ -22,6 +25,8 @@ export async function setup(uiCtx: UiLike) {
   return {
     teardown() {
       stopSyncLoop()
+      releaseMic() // 释放会话级麦克风流与共享 AudioContext
+      removeUiCss()
       uiCtx.unregisterApp('anka-jot')
     },
   }

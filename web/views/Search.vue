@@ -44,7 +44,7 @@ onMounted(() => setTimeout(() => document.getElementById('jot-search')?.focus(),
         <component :is="icons.Search" :size="15" class="text-ink-2" />
         <input
           id="jot-search" v-model="q" placeholder="搜索文字、语音、OCR…"
-          class="w-full bg-transparent text-[14px] text-ink-0 outline-none placeholder:text-ink-2/60"
+          class="w-full bg-transparent jot-fs-14 text-ink-0 outline-none placeholder:text-ink-2/60"
         />
       </div>
     </div>
@@ -54,14 +54,14 @@ onMounted(() => setTimeout(() => document.getElementById('jot-search')?.focus(),
       <button
         v-for="f in [{ v: '', l: '全部' }, { v: 'image', l: '仅图片' }, { v: 'audio', l: '仅语音' }]"
         :key="f.v" type="button"
-        class="cursor-pointer rounded-full px-2.5 py-1 text-[11.5px] transition-colors"
+        class="cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
         :class="typeFilter === f.v ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
         @click="typeFilter = f.v as any"
       >{{ f.l }}</button>
       <span class="w-1" />
       <button
         v-for="t in tags.slice(0, 8)" :key="t.name" type="button"
-        class="cursor-pointer rounded-full px-2.5 py-1 text-[11.5px] transition-colors"
+        class="cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
         :class="tagFilter === t.name ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
         @click="tagFilter = tagFilter === t.name ? '' : t.name"
       >{{ t.name }}</button>
@@ -71,14 +71,14 @@ onMounted(() => setTimeout(() => document.getElementById('jot-search')?.focus(),
     <div class="flex flex-col gap-2">
       <article
         v-for="h in hits" :key="h.noteId"
-        class="cursor-pointer rounded-card bg-bg-1 p-3.5 shadow-card transition-transform duration-micro active:scale-[0.985]"
+        class="jot-press cursor-pointer rounded-card bg-bg-1 p-3.5 shadow-card duration-micro"
         @click="push('note', { id: h.noteId })"
       >
         <div class="flex items-center justify-between gap-2">
-          <p class="truncate text-[14px] font-medium text-ink-0">{{ h.title }}</p>
-          <span class="shrink-0 rounded-full bg-brand/15 px-2 py-0.5 text-[10px] font-medium text-brand">{{ FIELD_LABEL[h.field] }}</span>
+          <p class="truncate jot-fs-14 font-medium text-ink-0">{{ h.title }}</p>
+          <span class="shrink-0 rounded-full bg-brand/15 px-2 py-0.5 jot-fs-10 font-medium text-brand">{{ FIELD_LABEL[h.field] }}</span>
         </div>
-        <p class="mt-1 line-clamp-2 text-[12.5px] leading-5 text-ink-1">
+        <p class="mt-1 jot-clamp-2 jot-fs-125 leading-5 text-ink-1">
           <template v-for="(part, i) in highlight(h.snippet).split(/[⟨⟩]/)" :key="i">
             <mark v-if="i % 2 === 1" class="rounded bg-brand/25 px-0.5 text-brand-soft">{{ part }}</mark>
             <template v-else>{{ part }}</template>

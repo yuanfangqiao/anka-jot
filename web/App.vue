@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /** App — Jot 根组件：视图出口（useNav 栈）+ 顶部标签导航。
  *  底部是宿主 dock 的地盘，Jot 不渲染任何悬浮按钮/底部栏（四入口在首页底部固定）。 */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useUi } from './host'
 import { goTab, nav, push } from './lib/nav'
 import { attachImage, captureLocation, newNote, saveDebounced } from './state/store'
+import { startThemeFollow, stopThemeFollow } from './lib/theme'
 import Home from './views/Home.vue'
 import Detail from './views/Detail.vue'
 import RecordView from './views/Record.vue'
@@ -18,24 +19,10 @@ import OfflineBanner from './components/OfflineBanner.vue'
 const ui = useUi()
 const icons = ui.icons
 
-/** 设计稿奶油浅色调色板（内联注入，见模板根节点：不依赖宿主 Tailwind/主题变量） */
-const PALETTE = {
-  '--bg-0': '#f6f2e9',
-  '--bg-1': '#ffffff',
-  '--bg-2': '#efe9dc',
-  '--text-0': '#2b2925',
-  '--text-1': '#6a665c',
-  '--text-2': '#a39e90',
-  '--primary': '#2f3b57',
-  '--primary-2': '#58678c',
-  '--cyan': '#7b6cf0',
-  '--ok': '#3d9e6b',
-  '--warn': '#d99a2b',
-  '--err': '#d94f4f',
-  '--line': 'rgb(60 54 44 / 0.08)',
-  '--glass': 'rgb(60 54 44 / 0.045)',
-  colorScheme: 'light',
-} as const
+/** 调色板跟随宿主主题：浅色宿主注入奶油色板，深色宿主跟随其 token（lib/theme.ts） */
+const rootEl = ref<HTMLElement>()
+onMounted(() => { if (rootEl.value) startThemeFollow(rootEl.value) })
+onBeforeUnmount(stopThemeFollow)
 
 const VIEWS: Record<string, any> = {
   home: Home, note: Detail, record: RecordView, camera: CameraView,
@@ -79,21 +66,17 @@ async function onAlbum(files: FileList | null) {
 </script>
 
 <template>
-  <!-- 调色板以内联变量注入根节点：inline style 优先级最高，宿主主题/样式表顺序都覆盖不掉 -->
-  <div
-    class="jot-root relative flex h-full w-full flex-col overflow-hidden bg-bg-0 text-ink-0"
-    :style="PALETTE"
-  >
+  <div ref="rootEl" class="jot-root relative flex h-full w-full flex-col overflow-hidden bg-bg-0 text-ink-0">
     <!-- 顶部导航（取代底部 Tab，避开宿主 dock） -->
     <header v-if="showChrome" class="z-20 shrink-0 px-4 pt-3">
       <div class="mx-auto flex w-full max-w-2xl items-center gap-3">
-        <p class="flex items-center gap-1.5 text-[17px] font-bold tracking-tight">
+        <p class="flex items-center gap-1.5 jot-fs-17 font-bold tracking-tight">
           <component :is="icons.NotebookPen" :size="18" class="text-brand" />即刻
         </p>
         <nav class="flex flex-1 items-center rounded-full bg-bg-1 p-1 shadow-card">
           <button
             v-for="t in TABS" :key="t.view" type="button"
-            class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] transition-colors"
+            class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 py-2 jot-fs-13 transition-colors"
             :class="nav.current.view === t.view ? 'bg-brand font-medium text-white' : 'text-ink-1 hover:text-ink-0'"
             @click="goTab(t.view)"
           >
@@ -119,25 +102,7 @@ async function onAlbum(files: FileList | null) {
 </template>
 
 <style>
-/* Jot 主题：按设计稿覆盖宿主 token（仅 .jot-root 作用域内生效，不影响宿主） */
-.jot-root {
-  /* !important：宿主深色主题会在更晚的级联里覆盖插件变量，导致手机端配色错乱 */
-  --bg-0: #f6f2e9 !important;
-  --bg-1: #ffffff !important;
-  --bg-2: #efe9dc !important;
-  --text-0: #2b2925 !important;
-  --text-1: #6a665c !important;
-  --text-2: #a39e90 !important;
-  --primary: #2f3b57 !important;
-  --primary-2: #58678c !important;
-  --cyan: #7b6cf0 !important;
-  --ok: #3d9e6b !important;
-  --warn: #d99a2b !important;
-  --err: #d94f4f !important;
-  --line: rgb(60 54 44 / 0.08) !important;
-  --glass: rgb(60 54 44 / 0.045) !important;
-  color-scheme: light;
-}
+/* 调色板已改由 lib/theme.ts 按宿主主题注入/移除（浅色奶油 / 深色跟随），此处仅保留阴影覆盖 */
 /* 设计稿的柔和卡片阴影（宿主 shadow-card 偏暗） */
 .jot-root .shadow-card {
   box-shadow: 0 1px 2px rgb(60 54 44 / 0.05), 0 10px 28px -14px rgb(60 54 44 / 0.18);

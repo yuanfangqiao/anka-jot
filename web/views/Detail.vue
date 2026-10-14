@@ -203,30 +203,30 @@ const metaLine = computed(() => {
       </button>
     </div>
 
-    <p class="px-1 text-[11px] text-ink-2">{{ metaLine }}</p>
+    <p class="px-1 jot-fs-11 text-ink-2">{{ metaLine }}</p>
 
     <input
       id="jot-title" v-model="note.title" placeholder="标题"
-      class="mt-2 w-full bg-transparent text-[22px] font-bold text-ink-0 outline-none placeholder:text-ink-2/60"
+      class="mt-2 w-full bg-transparent jot-fs-22 font-bold text-ink-0 outline-none placeholder:text-ink-2/60"
       @input="touched = true"
     />
     <textarea
       v-model="note.text" placeholder="开始记录… 支持 - [ ] 待办、@标签"
-      class="mt-2 min-h-40 w-full flex-1 resize-none bg-transparent text-[15px] leading-6 text-ink-0 outline-none placeholder:text-ink-2/60"
+      class="mt-2 min-h-40 w-full flex-1 resize-none bg-transparent jot-fs-15 leading-6 text-ink-0 outline-none placeholder:text-ink-2/60"
       @input="touched = true"
     />
 
     <!-- AI 结果 -->
     <div v-if="aiResult" class="mt-3 rounded-card bg-bg-1 p-4 shadow-card">
       <div class="mb-1 flex items-center justify-between">
-        <span class="flex items-center gap-1.5 text-[12px] font-medium text-brand">
+        <span class="flex items-center gap-1.5 jot-fs-12 font-medium text-brand">
           <component :is="icons.Sparkles" :size="13" />AI 摘要
         </span>
         <button type="button" class="cursor-pointer text-ink-2" @click="aiResult = ''">
           <component :is="icons.X" :size="14" />
         </button>
       </div>
-      <p class="whitespace-pre-wrap text-[13px] leading-6 text-ink-1">{{ aiResult }}</p>
+      <p class="whitespace-pre-wrap jot-fs-13 leading-6 text-ink-1">{{ aiResult }}</p>
     </div>
 
     <!-- 图片 -->
@@ -236,14 +236,14 @@ const metaLine = computed(() => {
     <div v-for="a in audios" :key="a.id" class="mt-3">
       <AudioCard :att="a" />
       <div v-if="a.transcript?.length" class="mt-2 rounded-card bg-bg-1 p-3.5">
-        <p class="mb-1.5 text-[11px] font-medium tracking-wide text-ink-2">转写稿（点句可改）</p>
-        <div v-for="(s, i) in a.transcript" :key="i" class="group flex gap-2 py-0.5 text-[13px] leading-6">
+        <p class="mb-1.5 jot-fs-11 font-medium tracking-wide text-ink-2">转写稿（点句可改）</p>
+        <div v-for="(s, i) in a.transcript" :key="i" class="group flex gap-2 py-0.5 jot-fs-13 leading-6">
           <template v-if="editingSeg?.att === a.id && editingSeg.idx === i">
             <input v-model="segDraft" class="flex-1 rounded bg-bg-2 px-2 py-0.5 outline-none" @keyup.enter="saveSeg(a)" />
             <button type="button" class="cursor-pointer text-brand" @click="saveSeg(a)">存</button>
           </template>
           <template v-else>
-            <span class="shrink-0 font-mono text-[11px] leading-6 text-ink-2">{{ Math.floor(s.t0 / 60) }}:{{ String(Math.floor(s.t0 % 60)).padStart(2, '0') }}</span>
+            <span class="shrink-0 font-mono jot-fs-11 leading-6 text-ink-2">{{ Math.floor(s.t0 / 60) }}:{{ String(Math.floor(s.t0 % 60)).padStart(2, '0') }}</span>
             <span class="cursor-pointer text-ink-0" :class="{ 'text-brand-soft': s.edited }" @click="editSeg(a, i)">{{ s.text }}</span>
           </template>
         </div>
@@ -255,7 +255,7 @@ const metaLine = computed(() => {
       <TagChip v-for="t in note.tags" :key="t" :name="t" :color="tagColorMap[t]" removable @remove="removeTag(t)" />
       <input
         v-model="tagInput" placeholder="+ 标签" list="jot-tags"
-        class="w-20 rounded-full bg-bg-1 px-2.5 py-1 text-[11.5px] text-ink-0 outline-none placeholder:text-ink-2/60"
+        class="w-20 rounded-full bg-bg-1 px-2.5 py-1 jot-fs-115 text-ink-0 outline-none placeholder:text-ink-2/60"
         @keyup.enter="addTag"
       />
       <datalist id="jot-tags"><option v-for="t in tags" :key="t.name" :value="t.name" /></datalist>
@@ -263,13 +263,13 @@ const metaLine = computed(() => {
 
     <!-- 底部附件入口 -->
     <div class="mt-5 flex gap-2">
-      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 text-[12.5px] text-ink-1 shadow-card" @click="takePhoto">
+      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 jot-fs-125 text-ink-1 shadow-card" @click="takePhoto">
         <component :is="icons.Camera" :size="15" />拍照
       </button>
-      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 text-[12.5px] text-ink-1 shadow-card" @click="albumInput?.click()">
+      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 jot-fs-125 text-ink-1 shadow-card" @click="albumInput?.click()">
         <component :is="icons.ImagePlus" :size="15" />添加相片
       </button>
-      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 text-[12.5px] text-ink-1 shadow-card" @click="push('record', { noteId: note.id })">
+      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 jot-fs-125 text-ink-1 shadow-card" @click="push('record', { noteId: note.id })">
         <component :is="icons.Mic" :size="15" />录音
       </button>
       <input ref="albumInput" type="file" accept="image/*" multiple class="hidden" @change="pickAlbum(($event.target as HTMLInputElement).files)" />

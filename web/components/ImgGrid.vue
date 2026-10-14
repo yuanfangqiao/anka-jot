@@ -41,7 +41,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       </div>
       <button
         type="button"
-        class="absolute bottom-1 right-1 cursor-pointer rounded-full bg-black/55 px-2 py-0.5 text-[10px] text-white backdrop-blur"
+        class="absolute bottom-1 right-1 cursor-pointer rounded-full bg-black/55 px-2 py-0.5 jot-fs-10 text-white backdrop-blur"
         :class="{ 'animate-pulse-dot': a.pendingOcr }"
         @click.stop="emit('ocr', a)"
       >{{ a.ocrText ? 'OCR✓' : 'OCR' }}</button>

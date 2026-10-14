@@ -1,5 +1,9 @@
-/** audio.ts — MediaRecorder 封装：分片收集（防崩溃丢整段）、
- *  AnalyserNode 实时波形采样、时长/峰值解码。mime 嗅探兼容 Safari。 */
+/** audio.ts — MediaRecorder 封装：会话级持久麦克风流（iOS 二次录音无声修复）。
+ *  iOS WebKit 下，每次录音都 getUserMedia 时：第二次拿到的流 track 虽是 live，
+ *  但音频会话未重新激活 → MediaRecorder 录到静音、Analyser 读到全 0（波形平线）。
+ *  改为整个 app 会话复用一条流：每次录音仅新建 MediaRecorder，
+ *  共享一个 AudioContext（每次 start 时 resume）。流失效（track ended）自动重建。
+ *  分片收集（防崩溃丢整段）、Analyser 实时波形采样、峰值降采样。mime 嗅探兼容 Safari。 */
 
 export interface Recording { blob: Blob; mime: string; duration: number; peaks: number[] }
 
@@ -10,39 +14,71 @@ export function pickMime(): string {
   return cands.find(c => MR.isTypeSupported?.(c)) ?? ''
 }
 
+// ─── MicSession：会话级持久麦克风流 ─────────────────────
+let micStream: MediaStream | null = null
+let micStreamPromise: Promise<MediaStream> | null = null
+let sharedAC: AudioContext | null = null
+
+/** 共享 AudioContext（iOS 对上下文数量有限制；挂起态由调用方 resume） */
+export function sharedAudioContext(): AudioContext {
+  if (!sharedAC || sharedAC.state === 'closed') {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+    sharedAC = new Ctx()
+  }
+  return sharedAC
+}
+
+/** 首次 getUserMedia，之后复用；全部 track ended（后台被杀等）时自动重建 */
+export function acquireMicStream(): Promise<MediaStream> {
+  const alive = micStream && micStream.getTracks().some(t => t.readyState === 'live')
+  if (alive) return Promise.resolve(micStream!)
+  if (!micStreamPromise) {
+    micStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(s => { micStream = s; micStreamPromise = null; return s })
+      .catch(e => { micStreamPromise = null; throw e })
+  }
+  return micStreamPromise
+}
+
+/** 仅插件 teardown 调用：释放整条流与共享 AudioContext */
+export function releaseMic(): void {
+  micStream?.getTracks().forEach(t => t.stop())
+  micStream = null
+  if (sharedAC && sharedAC.state !== 'closed') sharedAC.close().catch(() => {})
+  sharedAC = null
+}
+
 export class JotRecorder {
   private mr: MediaRecorder | null = null
   private chunks: Blob[] = []
-  private ac: AudioContext | null = null
-  private stream: MediaStream | null = null
   private t0 = 0
   peaks: number[] = []
   onPeak: ((peaks: number[]) => void) | null = null
   private raf = 0
+  private src: MediaStreamAudioSourceNode | null = null
 
   static supported(): boolean {
     return Boolean((navigator.mediaDevices as any)?.getUserMedia && (window as any).MediaRecorder)
   }
 
   async start(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const stream = await acquireMicStream()
     const mime = pickMime()
-    this.mr = new MediaRecorder(this.stream, mime ? { mimeType: mime } : undefined)
+    this.mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
     this.chunks = []
     this.peaks = []
     this.mr.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data) }
     this.mr.start(1000) // 分片：崩溃最多丢 1s
     this.t0 = Date.now()
 
-    // 实时波形采样（iOS Safari 需 webkitAudioContext 兜底；挂起态要 resume 才有数据）
+    // 实时波形采样（共享 AudioContext；挂起态必须 resume 才有数据）
     try {
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
-      this.ac = new Ctx()
-      void this.ac.resume?.().catch(() => {})
-      const src = this.ac.createMediaStreamSource(this.stream)
-      const an = this.ac.createAnalyser()
+      const ac = sharedAudioContext()
+      await ac.resume().catch(() => {})
+      const an = ac.createAnalyser()
       an.fftSize = 512
-      src.connect(an)
+      this.src = ac.createMediaStreamSource(stream)
+      this.src.connect(an)
       const buf = new Uint8Array(an.frequencyBinCount)
       const tick = () => {
         an.getByteTimeDomainData(buf)
@@ -62,12 +98,14 @@ export class JotRecorder {
     const mr = this.mr
     if (!mr) throw new Error('未在录音')
     cancelAnimationFrame(this.raf)
+    // 只停 MediaRecorder 与波形源；流与 AudioContext 保持存活，供下次录音复用
+    try { this.src?.disconnect() } catch { /* 忽略 */ }
+    this.src = null
     const blob = await new Promise<Blob>(res => {
       mr.onstop = () => res(new Blob(this.chunks, { type: mr.mimeType || 'audio/webm' }))
       mr.stop()
     })
-    this.stream?.getTracks().forEach(t => t.stop())
-    this.ac?.close().catch(() => {})
+    this.mr = null
     const duration = this.elapsed()
     return { blob, mime: blob.type, duration, peaks: downsample(this.peaks, 200) }
   }
