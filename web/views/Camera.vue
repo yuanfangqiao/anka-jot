@@ -20,9 +20,15 @@ const scanMode = ref(false)
 const mirrored = ref(true)
 watch(scanMode, v => { if (v) mirrored.value = false })
 
-/** 移动端走系统原生拍摄（<input capture>）：不做 web 取景，规避 iOS 每次重复授权，画质也更好 */
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-const nativeMode = ref(isMobile)
+/** 移动端可走系统原生拍摄（<input capture>）：无网页授权、画质更好。
+ *  真机判定：移动 UA 且无桌面插件——桌面 Chrome 设备模拟会伪造 UA，但 plugins
+ *  仍是桌面那套（PDF 等 >0 个），借此区分「真机」与「模拟器」，
+ *  避免开发态在桌面误入原生模式弹出文件选择器 */
+function likelyRealMobile(): boolean {
+  if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) return false
+  return (navigator.plugins?.length ?? 0) === 0
+}
+const nativeMode = ref(likelyRealMobile())
 const fileInput = ref<HTMLInputElement>()
 const shots = ref<JotAtt[]>([])
 const shotThumbs = ref<string[]>([])
@@ -43,6 +49,8 @@ async function openCamera() {
     })
     if (video.value) { video.value.srcObject = stream; await video.value.play() }
   } catch (e: any) {
+    // 真机取景失败（未授权/无摄像头）→ 自动降级原生拍摄；桌面仅提示
+    if (likelyRealMobile()) { nativeMode.value = true; return }
     error.value = '无法打开相机：' + (e?.message ?? '权限被拒绝') + '。可改用相册导入。'
   }
 }
@@ -119,13 +127,14 @@ async function finish() {
   } else pop()
 }
 
+/** 切换拍摄模式：原生（系统相机，无网页授权）/ 实时取景（getUserMedia） */
+function useNative() { nativeMode.value = true; error.value = '' }
+function useLive() { nativeMode.value = false; error.value = ''; void openCamera() }
+
 onMounted(() => {
-  if (nativeMode.value) {
-    // 直接唤起系统相机；被浏览器拦截时由页面按钮兜底
-    requestAnimationFrame(() => { try { fileInput.value?.click() } catch { /* 需用户手势 */ } })
-  } else {
-    void openCamera()
-  }
+  // 默认实时取景；真机上想免重复授权可切「原生拍摄」。
+  // 注意：Chrome 设备模拟会伪造移动端 UA，故不用 UA 自动判定模式，仅作为初始默认值
+  if (!nativeMode.value) void openCamera()
 })
 onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
 </script>
@@ -144,6 +153,13 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
         @click="scanMode = !scanMode"
       >{{ scanMode ? '扫描模式' : '拍照模式' }}</button>
       <div v-if="!nativeMode" class="flex gap-2">
+        <button
+          v-if="likelyRealMobile()"
+          type="button"
+          class="cursor-pointer rounded-full bg-white/15 px-3 py-1.5 text-[12px] backdrop-blur"
+          title="改用系统相机拍摄（免网页授权）"
+          @click="useNative"
+        >原生拍摄</button>
         <button
           type="button"
           class="cursor-pointer rounded-full p-2 backdrop-blur transition-colors"
@@ -176,6 +192,11 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
           class="cursor-pointer rounded-full bg-white px-5 py-2.5 text-[13px] font-medium text-black transition-transform active:scale-95"
           @click="fileInput?.click()"
         >打开系统相机</button>
+        <button
+          type="button"
+          class="cursor-pointer rounded-full bg-white/15 px-4 py-2 text-[12px] text-white/90 backdrop-blur transition-transform active:scale-95"
+          @click="useLive"
+        >改用实时取景</button>
       </div>
       <video v-else ref="video" playsinline muted class="h-full w-full object-cover transition-transform" :style="{ transform: mirrored ? 'scaleX(-1)' : 'none' }" />
       <!-- 扫描参考框（仅实时取景模式） -->

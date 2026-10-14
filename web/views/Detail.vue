@@ -90,6 +90,30 @@ async function pickAlbum(files: FileList | null) {
   toast(`已导入 ${files.length} 张图片`)
 }
 
+/** 拍照（对齐 kurumi CameraCapture）：
+ *  移动端 → 隐藏 <input capture> 直呼系统相机，无网页授权、无重复弹窗；
+ *  桌面 → 进入实时取景（getUserMedia + 快门），拍完挂进当前笔记 */
+const isMobileUA = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+const photoInput = ref<HTMLInputElement>()
+
+function takePhoto() {
+  if (!note.value) return
+  if (isMobileUA) photoInput.value?.click()
+  else push('camera', { noteId: note.value.id })
+}
+
+async function onPhotoFiles(files: FileList | null) {
+  if (!files?.length || !note.value) return
+  for (const f of Array.from(files)) {
+    if (!f.type.startsWith('image/')) continue
+    const a = await attachImage(note.value.id, f)
+    atts.value.push(a)
+  }
+  invalidateCover(note.value.id)
+  dirty()
+  toast(`已拍摄 ${files.length} 张`)
+}
+
 async function runOcr(att: JotAtt) {
   aiBusy.value = 'ocr'
   try {
@@ -239,6 +263,9 @@ const metaLine = computed(() => {
 
     <!-- 底部附件入口 -->
     <div class="mt-5 flex gap-2">
+      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 text-[12.5px] text-ink-1 shadow-card" @click="takePhoto">
+        <component :is="icons.Camera" :size="15" />拍照
+      </button>
       <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 text-[12.5px] text-ink-1 shadow-card" @click="albumInput?.click()">
         <component :is="icons.ImagePlus" :size="15" />添加相片
       </button>
@@ -246,6 +273,8 @@ const metaLine = computed(() => {
         <component :is="icons.Mic" :size="15" />录音
       </button>
       <input ref="albumInput" type="file" accept="image/*" multiple class="hidden" @change="pickAlbum(($event.target as HTMLInputElement).files)" />
+      <!-- kurumi 同款：移动端经 capture 直呼系统相机（免网页授权）；桌面不点它（走实时取景） -->
+      <input ref="photoInput" type="file" accept="image/*" capture="environment" multiple class="hidden" @change="onPhotoFiles(($event.target as HTMLInputElement).files)" />
     </div>
   </div>
   <Empty v-else icon="FileQuestion" title="笔记不存在" />
