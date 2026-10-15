@@ -3,6 +3,7 @@
 import { onUnmounted, ref } from 'vue'
 import { mediaUrl, toast, type JotAtt } from '../host'
 import * as db from './db'
+import { backfillAtt } from './media'
 
 export function useAudioPlayer(att: () => JotAtt | null) {
   const playing = ref(false)
@@ -16,6 +17,7 @@ export function useAudioPlayer(att: () => JotAtt | null) {
     if (!el) {
       const url = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath)
       if (!url) { toast('音频尚未同步到本机', false); return }
+      if (!url.startsWith('blob:')) void backfillAtt(a) // 服务端兜底播放：顺手回填本地
       el = new Audio(url)
       el.ontimeupdate = () => {
         progress.value = a.duration ? el!.currentTime / a.duration : 0

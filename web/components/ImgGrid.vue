@@ -3,6 +3,7 @@
 import { onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt } from '../host'
 import * as db from '../lib/db'
+import { backfillAtt } from '../lib/media'
 import ImgViewer from './ImgViewer.vue'
 
 const props = defineProps<{ atts: JotAtt[] }>()
@@ -14,13 +15,17 @@ const viewer = ref<string | null>(null)
 
 onMounted(async () => {
   for (const a of props.atts) {
-    urls.value[a.id] = (await db.blobUrl(a.id + ':thumb')) ?? (await db.blobUrl(a.id))
-      ?? mediaUrl(a.thumbPath) ?? mediaUrl(a.serverPath)
+    const local = (await db.blobUrl(a.id + ':thumb')) ?? (await db.blobUrl(a.id))
+    if (local) { urls.value[a.id] = local; continue }
+    // LRU 淘汰/新设备：服务端缩略图兜底显示，顺手拉回本地缓存
+    urls.value[a.id] = mediaUrl(a.thumbPath) ?? mediaUrl(a.serverPath)
+    void backfillAtt(a, 'thumb')
   }
 })
 
 async function openFull(a: JotAtt) {
   viewer.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? urls.value[a.id] ?? null
+  if (viewer.value && !viewer.value.startsWith('blob:')) void backfillAtt(a) // 全图回填
 }
 </script>
 

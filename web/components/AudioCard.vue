@@ -3,6 +3,7 @@
 import { onUnmounted, ref } from 'vue'
 import { mediaUrl, toast, useUi, type JotAtt } from '../host'
 import * as db from '../lib/db'
+import { backfillAtt } from '../lib/media'
 import { fmtDur } from '../lib/format'
 import Waveform from './Waveform.vue'
 
@@ -19,6 +20,7 @@ async function toggle() {
   if (!el) {
     const url = (await db.blobUrl(props.att.id)) ?? mediaUrl(props.att.serverPath)
     if (!url) return
+    if (!url.startsWith('blob:')) void backfillAtt(props.att) // 服务端兜底播放：顺手回填本地
     el = new Audio(url)
     el.ontimeupdate = () => {
       cur.value = el!.currentTime

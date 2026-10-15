@@ -7,6 +7,7 @@ import { computed, onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
 import { coverOf } from '../state/store'
 import * as db from '../lib/db'
+import { backfillAtt } from '../lib/media'
 import { dayLabel, fmtClock, fmtDur } from '../lib/format'
 import { hashCardColor } from '../lib/color'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
@@ -68,6 +69,7 @@ async function openPreview() {
   const a = imageAtts.value[0]
   if (!a) return
   preview.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? cover.value
+  if (preview.value && !preview.value.startsWith('blob:')) void backfillAtt(a) // 全图回填
 }
 
 /** 点击视频封面 → 全屏播放（本地 blob 优先，服务端路径兜底） */
@@ -76,6 +78,7 @@ async function playVideo() {
   const a = videoAtt.value
   if (!a) return
   playUrl.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath)
+  if (playUrl.value && !playUrl.value.startsWith('blob:')) void backfillAtt(a) // 服务端兜底播放：回填本地
 }
 
 /** 复合卡封面：有图用图，无图用视频海报 */

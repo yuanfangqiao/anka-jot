@@ -105,7 +105,8 @@ export async function delAtt(attId: string) {
   const d = await open()
   const t = d.transaction([T.atts, T.blobs], 'readwrite')
   t.objectStore(T.atts).delete(attId)
-  t.objectStore(T.blobs).delete(attId); t.objectStore(T.blobs).delete(attId + ':thumb')
+  evictBlob(t.objectStore(T.blobs), attId)
+  evictBlob(t.objectStore(T.blobs), attId + ':thumb')
   await done(t)
 }
 export async function attsOf(noteId: string): Promise<JotAtt[]> {
@@ -123,13 +124,15 @@ export async function delAttsOf(noteId: string) {
   const arr = await req<JotAtt[]>(t.objectStore(T.atts).index('noteId').getAll(noteId))
   for (const a of arr) {
     t.objectStore(T.atts).delete(a.id)
-    t.objectStore(T.blobs).delete(a.id); t.objectStore(T.blobs).delete(a.id + ':thumb')
+    evictBlob(t.objectStore(T.blobs), a.id)
+    evictBlob(t.objectStore(T.blobs), a.id + ':thumb')
   }
   await done(t)
 }
 export async function putBlob(key: string, blob: Blob) {
   const d = await open()
   const t = d.transaction(T.blobs, 'readwrite'); t.objectStore(T.blobs).put({ key, blob }); await done(t)
+  bumpLru(key)
 }
 export async function getBlob(key: string): Promise<Blob | null> {
   const d = await open()
@@ -139,9 +142,47 @@ export async function getBlob(key: string): Promise<Blob | null> {
 
 const urlCache = new Map<string, string>()
 export async function blobUrl(key: string): Promise<string | null> {
-  const hit = urlCache.get(key); if (hit) return hit
+  const hit = urlCache.get(key); if (hit) { bumpLru(key); return hit }
   const b = await getBlob(key); if (!b) return null
-  const u = URL.createObjectURL(b); urlCache.set(key, u); return u
+  const u = URL.createObjectURL(b); urlCache.set(key, u); bumpLru(key); return u
+}
+
+// ─── blob LRU（本地缓存上限） ─────────────────────
+/** 最近使用时间：会话内存为准，trim 时合并持久 kv('blobLru') 一次性写回，
+ *  避免大 blob 行的高频读写放大。淘汰只按 key 删行，全程不物化 blob 内容。 */
+const lru = new Map<string, number>()
+function bumpLru(key: string) { lru.set(key, Date.now()) }
+function dropLru(key: string) { lru.delete(key) }
+
+/** 撤销 objectURL 并删除 blob 行（删除附件 / LRU 淘汰共用；store 参数须来自 readwrite 事务） */
+function evictBlob(store: IDBObjectStore, key: string) {
+  store.delete(key)
+  const u = urlCache.get(key)
+  if (u) { URL.revokeObjectURL(u); urlCache.delete(key) }
+  dropLru(key)
+}
+
+/** LRU 淘汰已同步的全量 blob，保留最近 keep 个。
+ *  - 缩略图（':thumb'）不参与淘汰：体小且是列表封面体验的关键
+ *  - protect 内的附件 id 不动（尚未同步成功，删了即永久丢）
+ *  - blobs 表存在但无 LRU 记录的（历史数据/孤儿）按最旧优先清理 */
+export async function trimBlobs(keep = 20, protect: Set<string> = new Set()) {
+  const persistent = (await kvGet<Record<string, number>>('blobLru')) ?? {}
+  const merged = new Map(Object.entries(persistent))
+  for (const [k, v] of lru) merged.set(k, v)
+  const d = await open()
+  const keys = await req<IDBValidKey[]>(d.transaction(T.blobs).objectStore(T.blobs).getAllKeys())
+  const exist = new Set(keys.map(String))
+  for (const k of [...merged.keys()]) if (!exist.has(k)) { merged.delete(k); dropLru(k) } // 收敛孤儿 LRU 条目
+  for (const k of exist) if (!merged.has(k)) merged.set(k, 0) // 历史数据按最旧
+  const cand = [...merged.entries()]
+    .filter(([k]) => !k.endsWith(':thumb') && !protect.has(k))
+    .sort((a, b) => b[1] - a[1])
+  if (cand.length <= keep) return
+  const t = await tx(d, [T.blobs, T.kv], 'readwrite')
+  for (const [k] of cand.slice(keep)) { evictBlob(t.objectStore(T.blobs), k); merged.delete(k) }
+  t.objectStore(T.kv).put({ k: 'blobLru', v: Object.fromEntries(merged) })
+  await done(t)
 }
 
 // ─── tags ──────────────────────────────────────────

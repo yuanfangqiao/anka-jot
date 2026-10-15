@@ -64,6 +64,19 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
 /** 单条 outbox 最大重试次数，超过即丢弃（死信），避免毒丸堵死整个队列 */
 const MAX_OUTBOX_ATTEMPTS = 5
 
+/** 本地已同步全量 blob 的 LRU 上限（缩略图不计；未同步附件不参与淘汰） */
+const BLOB_KEEP = 20
+
+/** 推送成功后裁剪本地 blob：附件元数据里 serverPath 为空的（未同步成功）
+ *  绝不能删——删了就永久丢；正在查看/编辑的附件刚被 touch，天然在保留头部 */
+async function trimSyncedBlobs() {
+  try {
+    const atts = await db.allAtts()
+    const protect = new Set(atts.filter(a => !a.serverPath).map(a => a.id))
+    await db.trimBlobs(BLOB_KEEP, protect)
+  } catch { /* 淘汰失败不影响同步主流程 */ }
+}
+
 /** 轻量探活：stats 无参数无副作用，用于区分「服务端挂了」与「本条数据坏了」 */
 async function probeAlive(): Promise<boolean> {
   try { await callJot('stats'); return true } catch { return false }
@@ -113,6 +126,7 @@ export async function pushOutbox(): Promise<void> {
       }
     }
     syncState.backendUp = true
+    await trimSyncedBlobs() // 在线才裁：离线时本地 blob 是唯一副本
   } catch (e: any) {
     syncState.backendUp = false
     syncState.lastError = e?.message ?? String(e)

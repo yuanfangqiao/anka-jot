@@ -2,8 +2,9 @@
  *  一切写操作先落 IndexedDB（设备端事实源），同步由 lib/sync 后台接力。 */
 import { computed, reactive, ref } from 'vue'
 import type { JotAtt, JotNote, JotTag } from '../host'
-import { callJot, TAG_COLORS } from '../host'
+import { callJot, mediaUrl, TAG_COLORS } from '../host'
 import * as db from '../lib/db'
+import { backfillAtt } from '../lib/media'
 import { processImage, sha256Hex } from '../lib/image'
 import { processVideo } from '../lib/video'
 import { SearchIndex } from '../lib/search'
@@ -237,12 +238,22 @@ export async function coverOf(noteId: string): Promise<string | null> {
   const atts = await db.attsOf(noteId)
   const img = atts.find(a => a.kind === 'image')
   let url: string | null = null
-  if (img) url = (await db.blobUrl(img.id + ':thumb')) ?? (await db.blobUrl(img.id))
-  else {
+  let att: JotAtt | null = null
+  if (img) {
+    att = img
+    // 本地缓存优先；LRU 淘汰/新设备/清库后用服务端缩略图兜底，保证列表永远可预览
+    url = (await db.blobUrl(img.id + ':thumb')) ?? (await db.blobUrl(img.id))
+      ?? mediaUrl(img.thumbPath) ?? mediaUrl(img.serverPath)
+  } else {
     // 无图时用视频封面帧（':thumb'）做卡片封面
     const vid = atts.find(a => a.kind === 'video')
-    if (vid) url = await db.blobUrl(vid.id + ':thumb')
+    if (vid) {
+      att = vid
+      url = (await db.blobUrl(vid.id + ':thumb')) ?? mediaUrl(vid.thumbPath)
+    }
   }
+  // 走了服务端兜底：后台拉回缩略图进本地缓存（下次离线也能看）
+  if (url && att && !url.startsWith('blob:')) void backfillAtt(att, 'thumb')
   covers.set(noteId, url)
   return url
 }
