@@ -5,6 +5,12 @@ import { sha256Hex } from './image'
 
 export const VIDEO_MAX_BYTES = 100 * 1024 * 1024 // 100MB，与 server/media.py MAX_FILE 对齐
 
+/** 视频文件判定：mime 优先；部分 WebView/浏览器回传空 mime（.mov 常见），按扩展名兜底 */
+export function isVideoFile(f: File): boolean {
+  if (f.type) return f.type.startsWith('video/')
+  return /\.(mp4|mov|m4v|webm|3gp|mkv|avi)$/i.test(f.name)
+}
+
 export interface VideoOut {
   duration: number; width: number; height: number
   poster: Blob | null; sha256: string

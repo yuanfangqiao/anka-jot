@@ -4,8 +4,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { toast, useUi } from './host'
 import { goTab, nav, push } from './lib/nav'
-import { attachImage, attachVideo, captureLocation, newNote, saveDebounced } from './state/store'
-import { VIDEO_MAX_BYTES } from './lib/video'
+import { attachImage, attachVideo, captureLocation, flushSave, newNote } from './state/store'
+import { isVideoFile, VIDEO_MAX_BYTES } from './lib/video'
 import { startThemeFollow, stopThemeFollow } from './lib/theme'
 import Home from './views/Home.vue'
 import Detail from './views/Detail.vue'
@@ -56,31 +56,53 @@ function onPick(kind: 'text' | 'camera' | 'video' | 'album' | 'voice') {
   else videoInput.value?.click() // 视频：<input capture> 直呼系统相机录像（移动端免授权）
 }
 
+/** 相册导入（图片+视频混合多选）。
+ *  顺序必须「先挂附件、flushSave 再持久化」：persist 有空笔记保护，
+ *  若先 save 后挂附件会被判空跳过，touchNote 也查不到 → 整条笔记静默丢失（对齐 Record/Camera）。 */
 async function onAlbum(files: FileList | null) {
   if (!files?.length) return
   const n = newNote('album')
   captureLocation(n)
-  saveDebounced(n, true)
+  let added = 0
   for (const f of Array.from(files)) {
-    if (f.type.startsWith('image/')) await attachImage(n.id, f)
-    else if (f.type.startsWith('video/')) {
+    if (f.type.startsWith('image/')) { await attachImage(n.id, f); added++ }
+    else if (isVideoFile(f)) {
       if (f.size > VIDEO_MAX_BYTES) { toast('视频超过 100MB，已跳过', false); continue }
-      await attachVideo(n.id, f)
+      await attachVideo(n.id, f); added++
     }
   }
+  if (!added) return // 没有可导入的媒体：不建空笔记
+  await flushSave(n)
   push('note', { id: n.id })
 }
 
 /** 系统相机录像回传（移动端 capture 唤起录像模式；桌面端退化为文件选择） */
 async function onVideo(files: FileList | null) {
   const f = files?.[0]
-  if (!f || !f.type.startsWith('video/')) return
+  if (!f) return
+  if (!isVideoFile(f)) { toast('仅支持视频文件', false); return }
   if (f.size > VIDEO_MAX_BYTES) { toast('视频超过 100MB，暂不支持', false); return }
   const n = newNote('camera')
   captureLocation(n)
-  saveDebounced(n, true)
-  await attachVideo(n.id, f)
-  push('note', { id: n.id })
+  try {
+    await attachVideo(n.id, f) // 附件先落库
+    await flushSave(n) // 再持久化：persist 的空笔记检查此时能查到附件
+    push('note', { id: n.id })
+  } catch {
+    toast('视频保存失败，请重试', false)
+  }
+}
+
+/** 处理后重置 input value，确保同一文件再次选择仍触发 change */
+function onAlbumChange(e: Event) {
+  const el = e.target as HTMLInputElement
+  void onAlbum(el.files)
+  el.value = ''
+}
+function onVideoChange(e: Event) {
+  const el = e.target as HTMLInputElement
+  void onVideo(el.files)
+  el.value = ''
 }
 </script>
 
@@ -116,9 +138,9 @@ async function onVideo(files: FileList | null) {
       </KeepAlive>
     </main>
 
-    <input ref="albumInput" type="file" accept="image/*,video/*" multiple class="hidden" @change="onAlbum(($event.target as HTMLInputElement).files)" />
+    <input ref="albumInput" type="file" accept="image/*,video/*" multiple class="hidden" @change="onAlbumChange" />
     <!-- 移动端 capture 直呼系统相机录像模式（免网页授权，对齐拍照路线） -->
-    <input ref="videoInput" type="file" accept="video/*" capture="environment" class="hidden" @change="onVideo(($event.target as HTMLInputElement).files)" />
+    <input ref="videoInput" type="file" accept="video/*" capture="environment" class="hidden" @change="onVideoChange" />
   </div>
 </template>
 

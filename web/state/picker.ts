@@ -3,7 +3,7 @@
 import type { Ref } from 'vue'
 import { toast, type JotAtt, type JotNote } from '../host'
 import { attachImage, attachVideo, invalidateCover } from './store'
-import { VIDEO_MAX_BYTES } from '../lib/video'
+import { VIDEO_MAX_BYTES, isVideoFile } from '../lib/video'
 
 export function usePicker(note: Ref<JotNote | null>, atts: Ref<JotAtt[]>, dirty: () => void) {
   /** 单文件入管线；返回是否成功挂载 */
@@ -13,7 +13,7 @@ export function usePicker(note: Ref<JotNote | null>, atts: Ref<JotAtt[]>, dirty:
       atts.value.push(await attachImage(note.value.id, file))
       return true
     }
-    if (file.type.startsWith('video/')) {
+    if (isVideoFile(file)) {
       if (file.size > VIDEO_MAX_BYTES) { toast('视频超过 100MB，已跳过', false); return false }
       atts.value.push(await attachVideo(note.value.id, file))
       return true

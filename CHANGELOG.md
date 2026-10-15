@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复（2026-10-16 录像保存丢失）
+- 修复首页「视频」/「相册」入口新建笔记整条丢失：此前先 `saveDebounced` 后挂附件，`persist` 的「空笔记」保护在附件落库前判空直接跳过，`touchNote` 又查不到笔记，详情页 `getNote` 为空直接弹回主页。改为对齐 Record/Camera 既有顺序——附件先落库、`flushSave` 再持久化（图片相册路线原先靠定位回调的延迟 persist 碰巧救回；视频处理慢且无回调，必然丢失）
+- 视频文件判定加空 mime 扩展名兜底（`isVideoFile`），拒绝时 toast 提示不再静默；`<input>` 处理后重置 value，同一文件可重复触发 change
+
 ### 新增（2026-10-16 视频笔记）
 - **视频笔记**：首页五入口新增「视频」（移动端 `<input capture>` 直呼系统相机录像，免网页授权）+ 相册导入放开 `video/*`；`store.attachVideo` 管线自动抽封面帧（`lib/video.ts`，0.3s 截帧 → 480px JPEG，沿用 `:thumb` 约定），无法解码的格式（如桌面 Chrome 遇 HEVC）降级无封面、不阻塞导入
 - 主页新增视频卡（3:4 海报 + 中央 ▶ + 左下时长角标，点封面全屏播放 `VideoViewer`、点边框进详情）；复合卡无图时用视频海报当封面；详情页视频块 `VideoCard`
