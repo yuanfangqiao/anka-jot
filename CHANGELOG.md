@@ -2,6 +2,31 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 重构（2026-10-15 主页卡片体系）
+- 主页卡片改固定尺寸四类：图片卡 / 复合卡 3:4 竖卡（`jot-card-std`），纯文字卡 1:1 方卡（`jot-card-text`）错落排布，语音卡为 64px 矮条语音条（`jot-card-voice`，整条点击播放/暂停），卡片高度不再随图片自然高度失控
+- 文字卡改小红书语录卡：首字 djb2 哈希确定性取色（`lib/color.ts`，10 色马卡龙色板），彩底 + 纸感噪点纹理防眩 + 内高光（`jot-textcard`），居中大字号排版；无标题时正文首行即标题，主页不再有「未命名」白条卡
+- 图片卡满幅封面（`jot-imgcard`，object-cover 裁切）；点击图片区直接全屏预览（共用查看器 `ImgViewer.vue`，从 `ImgGrid` 抽取），点卡片其余区域进详情；多图带 x 张玻璃角标（`jot-imgbadge`）
+- 语音卡整条气泡点击即播/暂停（波形随进度点亮），右端 › 区域进详情；播放逻辑抽为 `lib/useAudioPlayer.ts`，详情页 `AudioCard` 行为不变
+- 复合卡上图下文（`jot-comp-img` 固定 56% 高 + `jot-comp-body`），图区点预览、文区进详情；含音频叠迷你播放钮（`jot-comp-play`）；无图复合（语音+文字）退化为彩卡 + 播放钮
+- 卡片底部不再标注类型图标，仅保留时间 + 同步状态点（`jot-card-foot`）；语音卡/文字卡时间统一显示在右下角（`jot-vc-time` 绝对定位 + `jot-tc-foot` 右对齐）
+- 深色主题彩卡经 `color-mix` 降明度适配（`html[data-theme='dark'] .jot-textcard`）
+
+### 优化（2026-10-15 真机 UI 美化）
+- 首页瀑布流改响应式 2/3/4 列（JS `matchMedia`）+ `jot-container` 容器断点，修复 iPad/桌面两侧大片留白
+- 底部工具条改为圆角方块瓷贴（`jot-bar-wrap/item/tile`），与宿主胶囊 dock 视觉区分
+- 语音卡改为气泡样式（播放钮 + 波形 + 时长，`jot-voicebar*`）；无 peaks 的旧录音显示占位波形
+- 封面图加载失败显示渐变占位（`jot-cover-missing`），不再破图
+- 日期分隔线强化：双侧渐变细线 + 加粗标签（`jot-date-sep`）
+- 卡片统一 `jot-card`：发丝边框 + 分层柔影 + 按压 scale 反馈
+- 日期分组时间线：同天笔记归入一个日期头下
+
+### 文档（2026-10-15）
+- 新增 `README.md`：核心架构（离线优先数据流 / MicSession / capture 拍照 / `jot-` 语义类体系）+ 语义类速查表 + Do/Don't
+- 新增 `AGENT.md`：插件私有 AI 工作守则与文档同步纪律
+- 新增 `FEATURE.md`：功能状态全景
+
 ## [0.1.0] - 2026-10-12
 
 首个可用版本（M0–M6 一次性交付）。离线优先的 PWA 多媒体速记。

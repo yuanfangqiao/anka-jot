@@ -1,4 +1,8 @@
 /** ui.css.ts — 插件自带语义样式表（CSS 字符串，setup 时注入一次，teardown 移除）。
+ *  主页卡片体系类在 ui.css.cards.ts（拆分控制行数），此处拼接注入。 */
+import { CSS_CARDS } from './ui.css.cards'
+
+/**
  *  目的：插件关键视觉不依赖宿主 Tailwind 构建是否包含新类——
  *  部署的宿主 CSS 是「构建那一刻」的类名集合，插件后续新增的任意值类
  *  （h-[72px]/border-[5px]/columns-2 等）在旧构建里不存在，曾导致
@@ -270,7 +274,7 @@ export function injectUiCss(): void {
   if (document.getElementById(STYLE_ID)) return
   const el = document.createElement('style')
   el.id = STYLE_ID
-  el.textContent = CSS
+  el.textContent = CSS + CSS_CARDS
   document.head.appendChild(el)
 }
 

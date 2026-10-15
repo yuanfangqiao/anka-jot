@@ -1,9 +1,16 @@
 <script setup lang="ts">
-/** NoteCard — 小红书瀑布流竖卡：封面图自然高度 + 标题/摘要 + 底部来源与时间。 */
+/** NoteCard — 主页时间线卡片：按内容分四类，尺寸固定、内容即类型。
+ *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；图片卡 = 满幅封面（3:4，点图全屏预览）；
+ *  语音卡 = 64px 矮条语音条（整条点击播放/暂停）；复合卡 = 3:4 上图下文（图区点预览、文区进详情）。 */
 import { computed, onMounted, ref } from 'vue'
-import { useUi, type JotAtt, type JotNote } from '../host'
-import { coverOf, hasAudio } from '../state/store'
-import { dayLabel, fmtClock, fmtDur } from '../lib/format'
+import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
+import { coverOf } from '../state/store'
+import * as db from '../lib/db'
+import { dayLabel, fmtClock } from '../lib/format'
+import { hashCardColor } from '../lib/color'
+import { useAudioPlayer } from '../lib/useAudioPlayer'
+import ImgViewer from './ImgViewer.vue'
+import VoiceMini from './VoiceMini.vue'
 
 const props = withDefaults(defineProps<{
   note: JotNote
@@ -14,99 +21,164 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ open: [] }>()
 const icons = useUi().icons
 
+type CardType = 'text' | 'image' | 'voice' | 'composite'
+
+const imageAtts = computed<JotAtt[]>(() => props.note.atts?.filter(a => a.kind === 'image') ?? [])
+const audioAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'audio') ?? null)
+
+/** 正文（剥 markdown 标记） */
+const text = computed(() =>
+  (props.note.text || '').replace(/^#+\s*/gm, '').replace(/[-*] \[[ x]\] /g, '☐ ').trim())
+
+/** 卡片类型判定：纯语音 / 纯图片 / 纯文字 / 其余一律复合 */
+const cardType = computed<CardType>(() => {
+  const hasImg = imageAtts.value.length > 0
+  const hasAud = Boolean(audioAtt.value)
+  const hasTxt = text.value.length > 0
+  if (hasAud && !hasImg && !hasTxt) return 'voice'
+  if (hasImg && !hasTxt && !hasAud) return 'image'
+  if (!hasImg && !hasAud) return 'text'
+  return 'composite'
+})
+
+/** 标题：无标题时取正文首行（文字卡直接以正文为主角，不再出现「未命名」） */
+const title = computed(() => props.note.title || text.value.split('\n')[0] || '')
+const body = computed(() =>
+  props.note.title ? text.value : text.value.split('\n').slice(1).join(' ').trim())
+
+/** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
+const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
+
+/** 封面（仅图片卡/复合卡需要） */
 const cover = ref<string | null>(null)
-/** 封面加载失败（媒体尚未同步到本机）→ 显示渐变占位 */
 const coverBroken = ref(false)
-onMounted(async () => { cover.value = await coverOf(props.note.id) })
-
-const SRC_ICON: Record<string, string> = {
-  text: 'Type', camera: 'Camera', album: 'Images', voice: 'Mic', share: 'Share2',
-}
-const SRC_HUE: Record<string, string> = {
-  text: '#5E9B74', camera: '#E0A53E', album: '#6B8FC4', voice: '#8B7BD8', share: '#5FA8A0',
-}
-
-/** 首个音频附件（含无 peaks 的老录音） */
-const audioAtt = computed<JotAtt | null>(() =>
-  props.note.atts?.find(x => x.kind === 'audio') ?? null)
-
-/** 语音气泡波形：无 peaks 的老录音用静态装饰波形占位（不再渲染空洞卡片） */
-const PLACEHOLDER = [0.32, 0.55, 0.78, 0.5, 0.9, 0.62, 0.4, 0.7, 0.45, 0.85, 0.58, 0.36, 0.66, 0.48, 0.74, 0.42, 0.6, 0.3]
-const voicePeaks = computed(() => {
-  const a = audioAtt.value
-  if (!a) return null
-  const src = a.peaks?.length ? a.peaks : PLACEHOLDER
-  const out: number[] = []
-  for (let i = 0; i < 26; i++) out.push(src[Math.floor(i / 26 * src.length)] ?? 0.05)
-  return out
+onMounted(async () => {
+  if (cardType.value === 'image' || cardType.value === 'composite')
+    cover.value = await coverOf(props.note.id)
 })
 
-function excerpt(n: JotNote): string {
-  const t = (n.text || '').replace(/^#+\s*/gm, '').replace(/[-*] \[[ x]\] /g, '☐ ').trim()
-  return t.slice(0, 120) || (hasAudio(n.atts) ? '语音笔记' : '')
+/** 点击图片区 → 全屏预览（全图 blob 优先，服务端路径兜底） */
+const preview = ref<string | null>(null)
+async function openPreview() {
+  const a = imageAtts.value[0]
+  if (!a) return
+  preview.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? cover.value
 }
 
-const title = computed(() => props.note.title || excerpt(props.note).split('\n')[0] || '未命名')
-const body = computed(() => {
-  const t = excerpt(props.note)
-  // 标题已占用首行时，正文去掉重复首行
-  return props.note.title ? t : t.split('\n').slice(1).join(' ').trim()
-})
+/** 复合卡迷你播放钮（与语音小卡同源播放逻辑） */
+const { playing: compPlaying, toggle: compToggle } = useAudioPlayer(() => audioAtt.value)
+
+const timeLabel = computed(() =>
+  (props.showDay ? dayLabel(props.note.createdAt) + ' ' : '') + fmtClock(props.note.createdAt))
 </script>
 
 <template>
+  <!-- 语音小卡：矮条语音条独立分发 -->
+  <VoiceMini v-if="cardType === 'voice'" :att="audioAtt!" :time="timeLabel" />
+
+  <!-- 标准卡：文字卡 1:1 方卡，图片 / 复合 3:4 竖卡，比例固定 -->
   <article
+    v-else
     class="jot-card"
-    :class="{ 'opacity-60': note.deleted }"
+    :class="[cardType === 'text' ? 'jot-card-text' : 'jot-card-std', { 'opacity-60': note.deleted }]"
     @click="emit('open')"
   >
-    <!-- 封面：图片自然高度，形成瀑布流感；加载失败（媒体未同步到本机）显示渐变占位 -->
-    <img
-      v-if="cover && !coverBroken"
-      :src="cover" alt="" class="w-full" loading="lazy"
-      @error="coverBroken = true"
-    />
-    <div v-else-if="cover && coverBroken" class="jot-cover-missing">
-      <component :is="icons.ImageOff" :size="20" />
-      <span>图片同步中…</span>
+    <!-- 文字卡：彩底语录 -->
+    <div v-if="cardType === 'text'" class="jot-textcard" :style="tcStyle">
+      <p class="jot-tc-quote">
+        <component v-if="note.pinned" :is="icons.Pin" :size="13" class="jot-icon-inline" />{{ title || '·' }}
+      </p>
+      <p v-if="body" class="jot-tc-sub">{{ body }}</p>
+      <div class="jot-tc-foot">
+        <span
+          v-if="note.syncState !== 'synced'"
+          class="h-1.5 w-1.5 rounded-full bg-warn"
+          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
+        />
+        <span>{{ timeLabel }}</span>
+      </div>
     </div>
 
-    <div class="p-2.5">
-      <h3 class="jot-clamp-2 jot-fs-135 font-semibold leading-snug text-ink-0">
-        <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
-      </h3>
-
-      <!-- 语音气泡（播放钮 + 波形 + 时长）；无音频时退化为摘要文字 -->
-      <div v-if="voicePeaks" class="jot-voicebar">
-        <span class="jot-voicebar-play">
-          <component :is="icons.Play" :size="12" />
-        </span>
-        <span class="jot-voicebar-wave">
-          <span
-            v-for="(p, i) in voicePeaks" :key="i"
-            class="jot-voicebar-bar"
-            :style="{ height: Math.max(3, p * 20) + 'px', opacity: 0.35 + p * 0.6 }"
-          />
-        </span>
-        <span class="jot-voicebar-dur">{{ fmtDur(audioAtt?.duration) }}</span>
+    <!-- 图片卡：满幅封面，点图预览 -->
+    <template v-else-if="cardType === 'image'">
+      <div class="jot-imgcard" @click.stop="openPreview">
+        <img
+          v-if="cover && !coverBroken"
+          :src="cover" alt="" loading="lazy"
+          @error="coverBroken = true"
+        />
+        <div v-else class="jot-cover-missing">
+          <component :is="icons.ImageOff" :size="20" />
+          <span>图片同步中…</span>
+        </div>
+        <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
       </div>
-      <p
-        v-if="body"
-        class="jot-fs-12 jot-leading-145 mt-1 text-ink-1"
-        :class="cover ? 'jot-clamp-2' : 'jot-clamp-5'"
-      >{{ body }}</p>
-
-      <!-- 底部：来源 + 时间 -->
-      <div class="mt-2 flex items-center gap-1 text-ink-2">
-        <component :is="icons[SRC_ICON[note.source] ?? 'Type']" :size="11" :style="{ color: SRC_HUE[note.source] }" />
-        <span class="jot-fs-10">{{ showDay ? dayLabel(note.createdAt) + ' ' : '' }}{{ fmtClock(note.createdAt) }}</span>
+      <div class="jot-card-foot">
+        <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
+        <span v-if="title" class="truncate">{{ title }}</span>
         <span class="flex-1" />
+        <span>{{ timeLabel }}</span>
         <span
           v-if="note.syncState !== 'synced'"
           class="h-1.5 w-1.5 rounded-full bg-warn"
           :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
         />
       </div>
-    </div>
+    </template>
+
+    <!-- 复合卡：上图下文；无图复合（语音+文字）退化为彩卡 + 迷你播放钮 -->
+    <template v-else>
+      <div v-if="imageAtts.length" class="jot-comp-img" @click.stop="openPreview">
+        <img
+          v-if="cover && !coverBroken"
+          :src="cover" alt="" loading="lazy"
+          @error="coverBroken = true"
+        />
+        <div v-else class="jot-cover-missing">
+          <component :is="icons.ImageOff" :size="20" />
+          <span>图片同步中…</span>
+        </div>
+        <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
+        <button
+          v-if="audioAtt"
+          type="button" class="jot-comp-play cursor-pointer"
+          :aria-label="compPlaying ? '暂停语音' : '播放语音'"
+          @click.stop="compToggle"
+        >
+          <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
+        </button>
+      </div>
+      <div v-if="imageAtts.length" class="jot-comp-body">
+        <h3 class="jot-clamp-2 jot-fs-125 font-semibold leading-snug text-ink-0">
+          <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
+        </h3>
+        <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 text-ink-1">{{ body }}</p>
+      </div>
+      <div v-else class="jot-textcard" :style="tcStyle">
+        <p class="jot-tc-quote">{{ title || '语音笔记' }}</p>
+        <p v-if="body" class="jot-tc-sub">{{ body }}</p>
+        <button
+          v-if="audioAtt"
+          type="button" class="jot-comp-play cursor-pointer"
+          :aria-label="compPlaying ? '暂停语音' : '播放语音'"
+          :style="{ background: 'rgb(0 0 0 / 0.28)' }"
+          @click.stop="compToggle"
+        >
+          <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
+        </button>
+      </div>
+      <div v-if="imageAtts.length" class="jot-card-foot">
+        <span class="flex-1" />
+        <span>{{ timeLabel }}</span>
+        <span
+          v-if="note.syncState !== 'synced'"
+          class="h-1.5 w-1.5 rounded-full bg-warn"
+          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
+        />
+      </div>
+    </template>
+
+    <!-- 全屏图片预览（共用查看器） -->
+    <ImgViewer :src="preview" @close="preview = null" />
   </article>
 </template>

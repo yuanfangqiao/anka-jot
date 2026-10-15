@@ -1,8 +1,9 @@
 <script setup lang="ts">
-/** ImgGrid — 图片附件九宫格 + 全屏查看器。 */
-import { onMounted, onUnmounted, ref } from 'vue'
+/** ImgGrid — 图片附件九宫格 + 全屏查看器（复用共用 ImgViewer）。 */
+import { onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt } from '../host'
 import * as db from '../lib/db'
+import ImgViewer from './ImgViewer.vue'
 
 const props = defineProps<{ atts: JotAtt[] }>()
 const emit = defineEmits<{ ocr: [att: JotAtt] }>()
@@ -21,11 +22,6 @@ onMounted(async () => {
 async function openFull(a: JotAtt) {
   viewer.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? urls.value[a.id] ?? null
 }
-
-// Esc 关闭全屏查看器
-function onKey(e: KeyboardEvent) { if (e.key === 'Escape') viewer.value = null }
-onMounted(() => window.addEventListener('keydown', onKey))
-onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
@@ -48,22 +44,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     </div>
   </div>
 
-  <!-- 全屏查看器 -->
-  <Teleport to="body">
-    <div
-      v-if="viewer"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-      @click="viewer = null"
-    >
-      <img :src="viewer" class="max-h-full max-w-full rounded-lg object-contain" alt="图片预览" />
-      <button
-        type="button"
-        class="absolute right-4 top-4 cursor-pointer rounded-full bg-white/15 p-2 text-white backdrop-blur"
-        aria-label="关闭预览" title="关闭预览"
-        @click.stop="viewer = null"
-      >
-        <component :is="icons.X" :size="18" />
-      </button>
-    </div>
-  </Teleport>
+  <!-- 全屏查看器（共用组件） -->
+  <ImgViewer :src="viewer" @close="viewer = null" />
 </template>
