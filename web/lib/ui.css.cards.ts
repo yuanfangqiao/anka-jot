@@ -133,6 +133,49 @@ html[data-theme='dark'] .jot-textcard {
 .jot-comp-img > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .jot-comp-img > .jot-cover-missing { height: 100%; }
 .jot-comp-body { flex: 1; min-height: 0; padding: 7px 10px 0; }
+/* 视频卡：中央 ▶ 播放徽章 + 左下时长角标（父容器需 relative，jot-imgcard/jot-comp-img 已是） */
+.jot-vid-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  pointer-events: none;
+}
+.jot-vid-dur {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+/* 详情页视频块：16:9 海报块，点击全屏播放 */
+.jot-videocard {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #000;
+  aspect-ratio: 16 / 9;
+  cursor: pointer;
+}
+.jot-videocard > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
 /* 多图角标（x张 玻璃贴）与复合卡图区迷你播放钮 */
 .jot-imgbadge {
   position: absolute;

@@ -5,6 +5,7 @@ import type { JotAtt, JotNote, JotTag } from '../host'
 import { callJot, TAG_COLORS } from '../host'
 import * as db from '../lib/db'
 import { processImage, sha256Hex } from '../lib/image'
+import { processVideo } from '../lib/video'
 import { SearchIndex } from '../lib/search'
 import { refreshPending, onSyncChanged, stripAtt, stripLocal } from '../lib/sync'
 
@@ -161,6 +162,20 @@ export async function attachAudio(noteId: string, blob: Blob, duration: number,
   return att
 }
 
+/** 视频附件：原片落库 + 封面帧存 ':thumb'（沿用图片约定，清理/同步自动兼容） */
+export async function attachVideo(noteId: string, blob: Blob): Promise<JotAtt> {
+  const p = await processVideo(blob)
+  const att: JotAtt = {
+    id: crypto.randomUUID(), noteId, kind: 'video', sha256: p.sha256,
+    width: p.width, height: p.height, duration: p.duration, createdAt: Date.now(),
+  }
+  await db.putBlob(att.id, blob)
+  if (p.poster) await db.putBlob(att.id + ':thumb', p.poster)
+  await db.putAtt(att)
+  await touchNote(noteId)
+  return att
+}
+
 async function touchNote(noteId: string) {
   let n = await db.getNote(noteId)
   const live = activeNote.value
@@ -223,6 +238,11 @@ export async function coverOf(noteId: string): Promise<string | null> {
   const img = atts.find(a => a.kind === 'image')
   let url: string | null = null
   if (img) url = (await db.blobUrl(img.id + ':thumb')) ?? (await db.blobUrl(img.id))
+  else {
+    // 无图时用视频封面帧（':thumb'）做卡片封面
+    const vid = atts.find(a => a.kind === 'video')
+    if (vid) url = await db.blobUrl(vid.id + ':thumb')
+  }
   covers.set(noteId, url)
   return url
 }

@@ -30,7 +30,8 @@ export async function refreshPending() {
 /** 归一化 mime：去掉 ;codecs= 参数（iOS 录音 blob.type 常带参数，服务端只认裸类型），空则按 kind 兜底 */
 function normMime(att: JotAtt, blob: Blob): string {
   const t = (blob.type || '').split(';')[0].trim().toLowerCase()
-  return t || (att.kind === 'image' ? 'image/jpeg' : 'audio/mp4')
+  if (t) return t
+  return att.kind === 'image' ? 'image/jpeg' : att.kind === 'video' ? 'video/mp4' : 'audio/mp4'
 }
 
 async function uploadAtt(att: JotAtt): Promise<boolean> {
@@ -51,7 +52,7 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
   for (let off = 0; off < b64.length; off += per) {
     await callJot('upload_chunk', { attId: att.id, seq: seq++, b64: b64.slice(off, off + per) })
   }
-  const thumb = att.kind === 'image' ? await db.getBlob(att.id + ':thumb') : null
+  const thumb = att.kind === 'audio' ? null : await db.getBlob(att.id + ':thumb') // 图片/视频都带缩略图
   const r = await callJot('upload_end', {
     attId: att.id, thumbB64: thumb ? await blobToB64(thumb) : undefined,
   })

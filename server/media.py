@@ -13,7 +13,7 @@ from pathlib import Path
 
 log = logging.getLogger('agentos.jot.media')
 
-MAX_FILE = 25 * 1024 * 1024          # 25MB
+MAX_FILE = 100 * 1024 * 1024         # 100MB（视频附件入场后上调；前端 video.ts 同步守卫）
 MAX_CHUNK = 1024 * 1024              # 单块原始字节上限 1MB
 EXT_BY_KIND = {
     ('image', 'image/jpeg'): 'jpg', ('image', 'image/png'): 'png',
@@ -22,9 +22,12 @@ EXT_BY_KIND = {
     ('audio', 'audio/m4a'): 'm4a', ('audio', 'audio/mpeg'): 'mp3',
     ('audio', 'audio/aac'): 'm4a', ('audio', 'audio/x-m4a'): 'm4a',
     ('audio', 'audio/ogg'): 'ogg', ('audio', 'audio/wav'): 'wav',
+    ('video', 'video/mp4'): 'mp4', ('video', 'video/quicktime'): 'mov',
+    ('video', 'video/webm'): 'webm', ('video', 'video/x-m4v'): 'm4v',
+    ('video', 'video/3gpp'): '3gp',
 }
 # mime 缺失/未识别时的兜底扩展名（不让未知 mime 成为同步毒丸）
-EXT_FALLBACK = {'image': 'jpg', 'audio': 'm4a'}
+EXT_FALLBACK = {'image': 'jpg', 'audio': 'm4a', 'video': 'mp4'}
 
 
 def _ext_for(kind: str, mime: str) -> str:
@@ -44,7 +47,7 @@ class MediaStore:
         self._sessions: dict[str, dict] = {}
 
     def begin(self, att_id: str, kind: str, mime: str, size: int, sha256: str):
-        if kind not in ('image', 'audio'):
+        if kind not in ('image', 'audio', 'video'):
             raise ValueError(f'不支持的媒体类型 {kind}')
         ext = _ext_for(kind, mime)
         if size <= 0 or size > MAX_FILE:

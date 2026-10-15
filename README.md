@@ -106,6 +106,8 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-textcard` / `jot-tc-*` | 文字语录彩卡（哈希取色 `--tc-bg` + 噪点防眩 + 居中排版，深色自动降明度） |
 | `jot-imgcard` / `jot-comp-img` / `jot-comp-body` | 图片卡满幅区 / 复合卡图区(56%)与文区 |
 | `jot-imgbadge` / `jot-comp-play` | 多图角标 / 复合卡迷你播放钮 |
+| `jot-vid-play` / `jot-vid-dur` | 视频卡 ▶ 播放徽章 / 左下时长角标 |
+| `jot-videocard` | 详情页视频块（16:9 海报，点击全屏播放） |
 | `jot-card-foot` | 卡片底部信息行（时间 + 同步点） |
 | `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` | 首页通栏方块工具条（圆角方块瓷贴，与宿主胶囊 dock 区分） |
 | `jot-date-sep` | 时间线日期分隔（双侧渐变细线 + 加粗标签） |

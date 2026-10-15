@@ -1,15 +1,17 @@
 <script setup lang="ts">
-/** NoteCard — 主页时间线卡片：按内容分四类，尺寸固定、内容即类型。
+/** NoteCard — 主页时间线卡片：按内容分五类，尺寸固定、内容即类型。
  *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；图片卡 = 满幅封面（3:4，点图全屏预览）；
- *  语音卡 = 64px 矮条语音条（整条点击播放/暂停）；复合卡 = 3:4 上图下文（图区点预览、文区进详情）。 */
+ *  视频卡 = 海报封面（3:4，▶ + 时长角标，点封面全屏播放）；语音卡 = 64px 矮条语音条；
+ *  复合卡 = 3:4 上封面（图或视频海报）下文（封面点预览/播放、文区进详情）。 */
 import { computed, onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
 import { coverOf } from '../state/store'
 import * as db from '../lib/db'
-import { dayLabel, fmtClock } from '../lib/format'
+import { dayLabel, fmtClock, fmtDur } from '../lib/format'
 import { hashCardColor } from '../lib/color'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
 import ImgViewer from './ImgViewer.vue'
+import VideoViewer from './VideoViewer.vue'
 import VoiceMini from './VoiceMini.vue'
 
 const props = withDefaults(defineProps<{
@@ -21,23 +23,26 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ open: [] }>()
 const icons = useUi().icons
 
-type CardType = 'text' | 'image' | 'voice' | 'composite'
+type CardType = 'text' | 'image' | 'voice' | 'video' | 'composite'
 
 const imageAtts = computed<JotAtt[]>(() => props.note.atts?.filter(a => a.kind === 'image') ?? [])
 const audioAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'audio') ?? null)
+const videoAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'video') ?? null)
 
 /** 正文（剥 markdown 标记） */
 const text = computed(() =>
   (props.note.text || '').replace(/^#+\s*/gm, '').replace(/[-*] \[[ x]\] /g, '☐ ').trim())
 
-/** 卡片类型判定：纯语音 / 纯图片 / 纯文字 / 其余一律复合 */
+/** 卡片类型判定：纯语音 / 纯视频 / 纯图片 / 纯文字 / 其余一律复合 */
 const cardType = computed<CardType>(() => {
   const hasImg = imageAtts.value.length > 0
   const hasAud = Boolean(audioAtt.value)
+  const hasVid = Boolean(videoAtt.value)
   const hasTxt = text.value.length > 0
-  if (hasAud && !hasImg && !hasTxt) return 'voice'
-  if (hasImg && !hasTxt && !hasAud) return 'image'
-  if (!hasImg && !hasAud) return 'text'
+  if (hasAud && !hasImg && !hasTxt && !hasVid) return 'voice'
+  if (hasVid && !hasImg && !hasTxt && !hasAud) return 'video'
+  if (hasImg && !hasTxt && !hasAud && !hasVid) return 'image'
+  if (!hasImg && !hasAud && !hasVid) return 'text'
   return 'composite'
 })
 
@@ -49,11 +54,11 @@ const body = computed(() =>
 /** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
 const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
 
-/** 封面（仅图片卡/复合卡需要） */
+/** 封面（图片卡/视频卡/复合卡需要；视频卡封面 = 海报帧） */
 const cover = ref<string | null>(null)
 const coverBroken = ref(false)
 onMounted(async () => {
-  if (cardType.value === 'image' || cardType.value === 'composite')
+  if (cardType.value !== 'voice' && cardType.value !== 'text')
     cover.value = await coverOf(props.note.id)
 })
 
@@ -64,6 +69,17 @@ async function openPreview() {
   if (!a) return
   preview.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? cover.value
 }
+
+/** 点击视频封面 → 全屏播放（本地 blob 优先，服务端路径兜底） */
+const playUrl = ref<string | null>(null)
+async function playVideo() {
+  const a = videoAtt.value
+  if (!a) return
+  playUrl.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath)
+}
+
+/** 复合卡封面：有图用图，无图用视频海报 */
+const hasCover = computed(() => imageAtts.value.length > 0 || Boolean(videoAtt.value))
 
 /** 复合卡迷你播放钮（与语音小卡同源播放逻辑） */
 const { playing: compPlaying, toggle: compToggle } = useAudioPlayer(() => audioAtt.value)
@@ -126,9 +142,40 @@ const timeLabel = computed(() =>
       </div>
     </template>
 
-    <!-- 复合卡：上图下文；无图复合（语音+文字）退化为彩卡 + 迷你播放钮 -->
+    <!-- 视频卡：海报封面 + 中央 ▶ + 左下时长角标，点封面全屏播放 -->
+    <template v-else-if="cardType === 'video'">
+      <div class="jot-imgcard" @click.stop="playVideo">
+        <img
+          v-if="cover && !coverBroken"
+          :src="cover" alt="" loading="lazy"
+          @error="coverBroken = true"
+        />
+        <div v-else class="jot-cover-missing">
+          <component :is="icons.Film ?? icons.Play" :size="20" />
+          <span>视频同步中…</span>
+        </div>
+        <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
+        <span v-if="videoAtt?.duration" class="jot-vid-dur">{{ fmtDur(videoAtt.duration) }}</span>
+      </div>
+      <div class="jot-card-foot">
+        <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
+        <span v-if="title" class="truncate">{{ title }}</span>
+        <span class="flex-1" />
+        <span>{{ timeLabel }}</span>
+        <span
+          v-if="note.syncState !== 'synced'"
+          class="h-1.5 w-1.5 rounded-full bg-warn"
+          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
+        />
+      </div>
+    </template>
+
+    <!-- 复合卡：上封面（图或视频海报）下文；无封面复合（语音+文字）退化为彩卡 + 迷你播放钮 -->
     <template v-else>
-      <div v-if="imageAtts.length" class="jot-comp-img" @click.stop="openPreview">
+      <div
+        v-if="hasCover" class="jot-comp-img"
+        @click.stop="imageAtts.length ? openPreview() : playVideo()"
+      >
         <img
           v-if="cover && !coverBroken"
           :src="cover" alt="" loading="lazy"
@@ -136,9 +183,13 @@ const timeLabel = computed(() =>
         />
         <div v-else class="jot-cover-missing">
           <component :is="icons.ImageOff" :size="20" />
-          <span>图片同步中…</span>
+          <span>媒体同步中…</span>
         </div>
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
+        <template v-if="!imageAtts.length && videoAtt">
+          <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
+          <span v-if="videoAtt.duration" class="jot-vid-dur">{{ fmtDur(videoAtt.duration) }}</span>
+        </template>
         <button
           v-if="audioAtt"
           type="button" class="jot-comp-play cursor-pointer"
@@ -148,12 +199,23 @@ const timeLabel = computed(() =>
           <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
         </button>
       </div>
-      <div v-if="imageAtts.length" class="jot-comp-body">
-        <h3 class="jot-clamp-2 jot-fs-125 font-semibold leading-snug text-ink-0">
-          <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
-        </h3>
-        <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 text-ink-1">{{ body }}</p>
-      </div>
+      <template v-if="hasCover">
+        <div class="jot-comp-body">
+          <h3 class="jot-clamp-2 jot-fs-125 font-semibold leading-snug text-ink-0">
+            <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
+          </h3>
+          <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 text-ink-1">{{ body }}</p>
+        </div>
+        <div class="jot-card-foot">
+          <span class="flex-1" />
+          <span>{{ timeLabel }}</span>
+          <span
+            v-if="note.syncState !== 'synced'"
+            class="h-1.5 w-1.5 rounded-full bg-warn"
+            :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
+          />
+        </div>
+      </template>
       <div v-else class="jot-textcard" :style="tcStyle">
         <p class="jot-tc-quote">{{ title || '语音笔记' }}</p>
         <p v-if="body" class="jot-tc-sub">{{ body }}</p>
@@ -167,18 +229,10 @@ const timeLabel = computed(() =>
           <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
         </button>
       </div>
-      <div v-if="imageAtts.length" class="jot-card-foot">
-        <span class="flex-1" />
-        <span>{{ timeLabel }}</span>
-        <span
-          v-if="note.syncState !== 'synced'"
-          class="h-1.5 w-1.5 rounded-full bg-warn"
-          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
-        />
-      </div>
     </template>
 
-    <!-- 全屏图片预览（共用查看器） -->
+    <!-- 全屏图片预览 / 视频播放（共用查看器） -->
     <ImgViewer :src="preview" @close="preview = null" />
+    <VideoViewer :src="playUrl" @close="playUrl = null" />
   </article>
 </template>

@@ -8,7 +8,7 @@ import { dayLabelFull, sameDay } from '../lib/format'
 import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
 
-const emit = defineEmits<{ create: [kind: 'text' | 'camera' | 'album' | 'voice'] }>()
+const emit = defineEmits<{ create: [kind: 'text' | 'camera' | 'video' | 'album' | 'voice'] }>()
 const icons = useUi().icons
 
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
@@ -16,10 +16,11 @@ const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.nam
 const pinned = computed(() => sortedNotes.value.filter(n => n.pinned))
 const flow = computed(() => sortedNotes.value.filter(n => !n.pinned))
 
-/** 四入口：细长工具条，墨色系图标，主入口用品牌色 */
+/** 五入口：细长工具条，墨色系图标，主入口用品牌色 */
 const QUICK = [
   { kind: 'text', icon: 'Type', label: '文本', main: true },
   { kind: 'camera', icon: 'Camera', label: '拍照' },
+  { kind: 'video', icon: 'Video', label: '视频' },
   { kind: 'album', icon: 'Images', label: '相册' },
   { kind: 'voice', icon: 'Mic', label: '语音' },
 ] as const

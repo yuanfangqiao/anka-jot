@@ -6,12 +6,14 @@ import { callJot, mediaUrl, toast, useUi, type JotAtt, type JotNote, type Seg } 
 import { pop, push } from '../lib/nav'
 import { fmtTime } from '../lib/format'
 import {
-  attachImage, ensureTag, flushSave, invalidateCover, newNote, removeNote,
+  ensureTag, flushSave, newNote, removeNote,
   saveDebounced, setActiveNote, tagColor, tags, togglePin, updateAtt,
 } from '../state/store'
+import { usePicker } from '../state/picker'
 import * as db from '../lib/db'
 import ImgGrid from '../components/ImgGrid.vue'
 import AudioCard from '../components/AudioCard.vue'
+import VideoCard from '../components/VideoCard.vue'
 import TagChip from '../components/TagChip.vue'
 import Empty from '../components/Empty.vue'
 
@@ -29,6 +31,7 @@ const albumInput = ref<HTMLInputElement>()
 
 const images = computed(() => atts.value.filter(a => a.kind === 'image'))
 const audios = computed(() => atts.value.filter(a => a.kind === 'audio'))
+const videos = computed(() => atts.value.filter(a => a.kind === 'video'))
 
 let alive = true
 let focusTimer = 0
@@ -77,18 +80,9 @@ function removeTag(t: string) {
 }
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
 
-// ─── 附件 ──
-async function pickAlbum(files: FileList | null) {
-  if (!files || !note.value) return
-  for (const f of Array.from(files)) {
-    if (!f.type.startsWith('image/')) continue
-    const a = await attachImage(note.value.id, f)
-    atts.value.push(a)
-  }
-  invalidateCover(note.value.id)
-  dirty()
-  toast(`已导入 ${files.length} 张图片`)
-}
+// ─── 附件（导入/拍照/录像处理在 state/picker.ts） ──
+const { pickAlbum, onPhotoFiles, onVideoFiles } = usePicker(note, atts, dirty)
+const videoInput = ref<HTMLInputElement>()
 
 /** 拍照（对齐 kurumi CameraCapture）：
  *  移动端 → 隐藏 <input capture> 直呼系统相机，无网页授权、无重复弹窗；
@@ -100,18 +94,6 @@ function takePhoto() {
   if (!note.value) return
   if (isMobileUA) photoInput.value?.click()
   else push('camera', { noteId: note.value.id })
-}
-
-async function onPhotoFiles(files: FileList | null) {
-  if (!files?.length || !note.value) return
-  for (const f of Array.from(files)) {
-    if (!f.type.startsWith('image/')) continue
-    const a = await attachImage(note.value.id, f)
-    atts.value.push(a)
-  }
-  invalidateCover(note.value.id)
-  dirty()
-  toast(`已拍摄 ${files.length} 张`)
 }
 
 async function runOcr(att: JotAtt) {
@@ -232,6 +214,9 @@ const metaLine = computed(() => {
     <!-- 图片 -->
     <ImgGrid v-if="images.length" class="mt-3" :atts="images" @ocr="runOcr" />
 
+    <!-- 视频 -->
+    <VideoCard v-for="a in videos" :key="a.id" class="mt-3" :att="a" />
+
     <!-- 音频 + 转写 -->
     <div v-for="a in audios" :key="a.id" class="mt-3">
       <AudioCard :att="a" />
@@ -272,9 +257,14 @@ const metaLine = computed(() => {
       <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 jot-fs-125 text-ink-1 shadow-card" @click="push('record', { noteId: note.id })">
         <component :is="icons.Mic" :size="15" />录音
       </button>
-      <input ref="albumInput" type="file" accept="image/*" multiple class="hidden" @change="pickAlbum(($event.target as HTMLInputElement).files)" />
+      <button type="button" class="flex cursor-pointer items-center gap-1.5 rounded-full bg-bg-1 px-3.5 py-2 jot-fs-125 text-ink-1 shadow-card" @click="videoInput?.click()">
+        <component :is="icons.Video ?? icons.Camera" :size="15" />视频
+      </button>
+      <input ref="albumInput" type="file" accept="image/*,video/*" multiple class="hidden" @change="pickAlbum(($event.target as HTMLInputElement).files)" />
       <!-- kurumi 同款：移动端经 capture 直呼系统相机（免网页授权）；桌面不点它（走实时取景） -->
       <input ref="photoInput" type="file" accept="image/*" capture="environment" multiple class="hidden" @change="onPhotoFiles(($event.target as HTMLInputElement).files)" />
+      <!-- 视频同理：capture 唤起系统相机录像模式 -->
+      <input ref="videoInput" type="file" accept="video/*" capture="environment" class="hidden" @change="onVideoFiles(($event.target as HTMLInputElement).files)" />
     </div>
   </div>
   <Empty v-else icon="FileQuestion" title="笔记不存在" />

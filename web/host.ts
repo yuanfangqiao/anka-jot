@@ -30,7 +30,7 @@ export function toast(msg: string, ok = true) {
 
 export interface Seg { t0: number; t1: number; text: string; edited?: boolean }
 export interface JotAtt {
-  id: string; noteId: string; kind: 'image' | 'audio'
+  id: string; noteId: string; kind: 'image' | 'audio' | 'video'
   serverPath?: string | null; thumbPath?: string | null
   width?: number; height?: number; duration?: number
   peaks?: number[] | null; ocrText?: string | null

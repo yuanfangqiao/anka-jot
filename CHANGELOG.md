@@ -4,11 +4,17 @@
 
 ## [Unreleased]
 
+### 新增（2026-10-16 视频笔记）
+- **视频笔记**：首页五入口新增「视频」（移动端 `<input capture>` 直呼系统相机录像，免网页授权）+ 相册导入放开 `video/*`；`store.attachVideo` 管线自动抽封面帧（`lib/video.ts`，0.3s 截帧 → 480px JPEG，沿用 `:thumb` 约定），无法解码的格式（如桌面 Chrome 遇 HEVC）降级无封面、不阻塞导入
+- 主页新增视频卡（3:4 海报 + 中央 ▶ + 左下时长角标，点封面全屏播放 `VideoViewer`、点边框进详情）；复合卡无图时用视频海报当封面；详情页视频块 `VideoCard`
+- 同步链路视频全打通：`sync.ts` mime 兜底 + 缩略图携带，`server/media.py` kind 白名单 + 扩展名映射，单文件上限 25MB → 100MB（前端 `VIDEO_MAX_BYTES` 同步守卫）
+- 详情页附件采集逻辑抽为 `state/picker.ts`（相册导入 / 拍照 / 录像统一入口）
+
 ### 重构（2026-10-15 主页卡片体系）
 - 主页卡片改固定尺寸四类：图片卡 / 复合卡 3:4 竖卡（`jot-card-std`），纯文字卡 1:1 方卡（`jot-card-text`）错落排布，语音卡为 64px 矮条语音条（`jot-card-voice`，整条点击播放/暂停），卡片高度不再随图片自然高度失控
 - 文字卡改小红书语录卡：首字 djb2 哈希确定性取色（`lib/color.ts`，10 色马卡龙色板），彩底 + 纸感噪点纹理防眩 + 内高光（`jot-textcard`），居中大字号排版；无标题时正文首行即标题，主页不再有「未命名」白条卡
 - 图片卡满幅封面（`jot-imgcard`，object-cover 裁切）；点击图片区直接全屏预览（共用查看器 `ImgViewer.vue`，从 `ImgGrid` 抽取），点卡片其余区域进详情；多图带 x 张玻璃角标（`jot-imgbadge`）
-- 语音卡整条气泡点击即播/暂停（波形随进度点亮），右端 › 区域进详情；播放逻辑抽为 `lib/useAudioPlayer.ts`，详情页 `AudioCard` 行为不变
+- 语音卡为整条语音条，点击即播/暂停（波形随进度点亮），时间戳在右下角；播放逻辑抽为 `lib/useAudioPlayer.ts`，详情页 `AudioCard` 行为不变
 - 复合卡上图下文（`jot-comp-img` 固定 56% 高 + `jot-comp-body`），图区点预览、文区进详情；含音频叠迷你播放钮（`jot-comp-play`）；无图复合（语音+文字）退化为彩卡 + 播放钮
 - 卡片底部不再标注类型图标，仅保留时间 + 同步状态点（`jot-card-foot`）；语音卡/文字卡时间统一显示在右下角（`jot-vc-time` 绝对定位 + `jot-tc-foot` 右对齐）
 - 深色主题彩卡经 `color-mix` 降明度适配（`html[data-theme='dark'] .jot-textcard`）

@@ -2,9 +2,10 @@
 /** App — Jot 根组件：视图出口（useNav 栈）+ 顶部标签导航。
  *  底部是宿主 dock 的地盘，Jot 不渲染任何悬浮按钮/底部栏（四入口在首页底部固定）。 */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useUi } from './host'
+import { toast, useUi } from './host'
 import { goTab, nav, push } from './lib/nav'
-import { attachImage, captureLocation, newNote, saveDebounced } from './state/store'
+import { attachImage, attachVideo, captureLocation, newNote, saveDebounced } from './state/store'
+import { VIDEO_MAX_BYTES } from './lib/video'
 import { startThemeFollow, stopThemeFollow } from './lib/theme'
 import Home from './views/Home.vue'
 import Detail from './views/Detail.vue'
@@ -41,16 +42,18 @@ const TABS = [
 ]
 
 const albumInput = ref<HTMLInputElement>()
+const videoInput = ref<HTMLInputElement>()
 
-/** ＋四入口统一分发 */
-function onPick(kind: 'text' | 'camera' | 'album' | 'voice') {
+/** ＋五入口统一分发 */
+function onPick(kind: 'text' | 'camera' | 'video' | 'album' | 'voice') {
   if (kind === 'text') {
     const n = newNote('text')
     captureLocation(n)
     push('note', { id: n.id, fresh: '1' })
   } else if (kind === 'camera') push('camera')
   else if (kind === 'voice') push('record')
-  else albumInput.value?.click()
+  else if (kind === 'album') albumInput.value?.click()
+  else videoInput.value?.click() // 视频：<input capture> 直呼系统相机录像（移动端免授权）
 }
 
 async function onAlbum(files: FileList | null) {
@@ -60,7 +63,23 @@ async function onAlbum(files: FileList | null) {
   saveDebounced(n, true)
   for (const f of Array.from(files)) {
     if (f.type.startsWith('image/')) await attachImage(n.id, f)
+    else if (f.type.startsWith('video/')) {
+      if (f.size > VIDEO_MAX_BYTES) { toast('视频超过 100MB，已跳过', false); continue }
+      await attachVideo(n.id, f)
+    }
   }
+  push('note', { id: n.id })
+}
+
+/** 系统相机录像回传（移动端 capture 唤起录像模式；桌面端退化为文件选择） */
+async function onVideo(files: FileList | null) {
+  const f = files?.[0]
+  if (!f || !f.type.startsWith('video/')) return
+  if (f.size > VIDEO_MAX_BYTES) { toast('视频超过 100MB，暂不支持', false); return }
+  const n = newNote('camera')
+  captureLocation(n)
+  saveDebounced(n, true)
+  await attachVideo(n.id, f)
   push('note', { id: n.id })
 }
 </script>
@@ -97,7 +116,9 @@ async function onAlbum(files: FileList | null) {
       </KeepAlive>
     </main>
 
-    <input ref="albumInput" type="file" accept="image/*" multiple class="hidden" @change="onAlbum(($event.target as HTMLInputElement).files)" />
+    <input ref="albumInput" type="file" accept="image/*,video/*" multiple class="hidden" @change="onAlbum(($event.target as HTMLInputElement).files)" />
+    <!-- 移动端 capture 直呼系统相机录像模式（免网页授权，对齐拍照路线） -->
+    <input ref="videoInput" type="file" accept="video/*" capture="environment" class="hidden" @change="onVideo(($event.target as HTMLInputElement).files)" />
   </div>
 </template>
 
