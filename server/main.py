@@ -116,7 +116,7 @@ class Jot(Service):
 
     def upload_end(self, attId: str, thumbB64: str | None = None):
         r = self.media.end(str(attId), thumbB64)
-        self.store.put_media(r['sha256'], r['path'], r['size'], 'image')
+        self.store.put_media(r['sha256'], r['path'], r['size'], r['kind'])
         self.store.set_att_media(str(attId), r['path'], r['thumbPath'])
         return r
 

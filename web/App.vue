@@ -69,11 +69,11 @@ async function onAlbum(files: FileList | null) {
   <div ref="rootEl" class="jot-root relative flex h-full w-full flex-col overflow-hidden bg-bg-0 text-ink-0">
     <!-- 顶部导航（取代底部 Tab，避开宿主 dock） -->
     <header v-if="showChrome" class="z-20 shrink-0 px-4 pt-3">
-      <div class="mx-auto flex w-full max-w-2xl items-center gap-3">
+      <div class="jot-container flex items-center gap-3">
         <p class="flex items-center gap-1.5 jot-fs-17 font-bold tracking-tight">
           <component :is="icons.NotebookPen" :size="18" class="text-brand" />即刻
         </p>
-        <nav class="flex flex-1 items-center rounded-full bg-bg-1 p-1 shadow-card">
+        <nav class="jot-nav flex flex-1 items-center rounded-full bg-bg-1 p-1 shadow-card">
           <button
             v-for="t in TABS" :key="t.view" type="button"
             class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 py-2 jot-fs-13 transition-colors"
@@ -85,7 +85,7 @@ async function onAlbum(files: FileList | null) {
         </nav>
 
       </div>
-      <div class="mx-auto mt-2 w-full max-w-2xl">
+      <div class="jot-container mt-2">
         <OfflineBanner />
       </div>
     </header>

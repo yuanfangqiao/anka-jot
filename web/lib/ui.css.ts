@@ -60,6 +60,155 @@ const CSS = `
 .jot-cols { display: flex; gap: 10px; }
 .jot-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1 1 0%; }
 
+/* ─── 主容器响应式宽度（替代 max-w-2xl/md:max-w-3xl，宿主构建缺 md: 变体） ─── */
+.jot-container { width: 100%; margin-left: auto; margin-right: auto; }
+@media (min-width: 768px) { .jot-container { max-width: 46rem; } }
+@media (min-width: 1280px) { .jot-container { max-width: 68rem; } }
+
+/* 顶部导航胶囊限宽（iPad 上不随容器拉满） */
+.jot-nav { max-width: 24rem; margin-left: auto; }
+
+/* ─── 笔记卡（大圆角 + 发丝边框 + 分层柔影 + 按压反馈） ─── */
+.jot-card {
+  position: relative;
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--bg-1, #fff);
+  border: 1px solid var(--line, rgb(60 54 44 / 0.08));
+  box-shadow: 0 1px 2px rgb(60 54 44 / 0.04), 0 12px 32px -16px rgb(60 54 44 / 0.22);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.jot-card:active { transform: scale(0.97); }
+
+/* ─── 首页通栏方块工具条（与宿主胶囊 dock 形状区分；玻璃质感 + 发丝顶边） ─── */
+.jot-bar-wrap {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 8px 14px max(10px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg-1, #fff) 86%, transparent);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border-top: 1px solid var(--line, rgb(60 54 44 / 0.08));
+}
+.jot-bar { display: flex; align-items: center; }
+.jot-bar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--text-1, #6a665c);
+  transition: transform 0.2s;
+}
+.jot-bar-item:active { transform: scale(0.92); }
+/* 圆角方块瓷贴（squircle 语言，呼应 iOS） */
+.jot-bar-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background: var(--glass, rgb(60 54 44 / 0.045));
+  border: 1px solid var(--line, rgb(60 54 44 / 0.08));
+}
+.jot-bar-item-main { color: var(--primary, #2f3b57); }
+.jot-bar-item-main .jot-bar-tile {
+  background: var(--primary, #2f3b57);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 16px -6px rgb(47 59 87 / 0.5);
+}
+.jot-bar-label { font-size: 10px; font-weight: 500; line-height: 1.2; }
+
+/* 滚动区底部留白（避让通栏工具条；替代 pb-24，宿主构建可能缺该类） */
+.jot-scroll-pad { padding-bottom: 96px; }
+
+/* ─── 语音气泡（播放钮 + 波形 + 时长，iMessage 风） ─── */
+.jot-voicebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary, #2f3b57) 7%, var(--bg-1, #fff));
+  border: 1px solid color-mix(in srgb, var(--primary, #2f3b57) 14%, transparent);
+}
+.jot-voicebar-play {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  background: var(--primary, #2f3b57);
+  color: #fff;
+}
+.jot-voicebar-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+}
+.jot-voicebar-bar {
+  flex: 1;
+  min-width: 2px;
+  max-width: 3px;
+  border-radius: 9999px;
+  background: var(--primary, #2f3b57);
+}
+.jot-voicebar-dur {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-1, #6a665c);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ─── 时间线日期分隔（双侧渐变细线 + 加粗标签） ─── */
+.jot-date-sep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 4px 0;
+  margin-bottom: 10px;
+}
+.jot-date-sep::before, .jot-date-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+}
+.jot-date-sep::before { background: linear-gradient(to right, transparent, var(--line, rgb(60 54 44 / 0.14))); }
+.jot-date-sep::after { background: linear-gradient(to left, transparent, var(--line, rgb(60 54 44 / 0.14))); }
+.jot-date-sep-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-1, #6a665c);
+}
+
+/* ─── 封面图加载失败渐变占位（媒体尚未同步到本机） ─── */
+.jot-cover-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 120px;
+  color: var(--text-2, #a39e90);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--primary, #2f3b57) 8%, var(--bg-2, #efe9dc)),
+    var(--bg-2, #efe9dc));
+  font-size: 11px;
+}
+
 /* ─── 常用任意值字号（部署构建缺 text-[Xpx] 时降级为父级字号，语义类保证一致） ─── */
 .jot-fs-10 { font-size: 10px; }
 .jot-fs-11 { font-size: 11px; }

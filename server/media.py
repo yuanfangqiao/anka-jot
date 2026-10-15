@@ -7,8 +7,11 @@
 
 import base64
 import hashlib
+import logging
 import time
 from pathlib import Path
+
+log = logging.getLogger('agentos.jot.media')
 
 MAX_FILE = 25 * 1024 * 1024          # 25MB
 MAX_CHUNK = 1024 * 1024              # 单块原始字节上限 1MB
@@ -17,7 +20,21 @@ EXT_BY_KIND = {
     ('image', 'image/webp'): 'webp',
     ('audio', 'audio/mp4'): 'm4a', ('audio', 'audio/webm'): 'webm',
     ('audio', 'audio/m4a'): 'm4a', ('audio', 'audio/mpeg'): 'mp3',
+    ('audio', 'audio/aac'): 'm4a', ('audio', 'audio/x-m4a'): 'm4a',
+    ('audio', 'audio/ogg'): 'ogg', ('audio', 'audio/wav'): 'wav',
 }
+# mime 缺失/未识别时的兜底扩展名（不让未知 mime 成为同步毒丸）
+EXT_FALLBACK = {'image': 'jpg', 'audio': 'm4a'}
+
+
+def _ext_for(kind: str, mime: str) -> str:
+    """归一化 mime（去 ;codecs= 参数，iOS Safari blob.type 常带）后查表，未识别按 kind 兜底。"""
+    norm = (mime or '').split(';')[0].strip().lower()
+    ext = EXT_BY_KIND.get((kind, norm))
+    if ext is None:
+        ext = EXT_FALLBACK[kind]
+        log.warning('未识别 mime 按 %s 兜底: %r -> .%s', kind, mime, ext)
+    return ext
 
 
 class MediaStore:
@@ -29,9 +46,7 @@ class MediaStore:
     def begin(self, att_id: str, kind: str, mime: str, size: int, sha256: str):
         if kind not in ('image', 'audio'):
             raise ValueError(f'不支持的媒体类型 {kind}')
-        ext = EXT_BY_KIND.get((kind, (mime or '').lower()))
-        if ext is None:
-            raise ValueError(f'不支持的 mime: {mime}')
+        ext = _ext_for(kind, mime)
         if size <= 0 or size > MAX_FILE:
             raise ValueError(f'文件大小非法: {size}')
         self._sessions[att_id] = {
@@ -66,7 +81,7 @@ class MediaStore:
             thumb_rel = self._write(digest, 'thumb.jpg',
                                     base64.b64decode(thumb_b64))
         return {'ok': True, 'path': rel, 'thumbPath': thumb_rel,
-                'sha256': digest, 'size': len(buf)}
+                'sha256': digest, 'size': len(buf), 'kind': s['kind']}
 
     def _write(self, digest: str, ext: str, buf: bytes) -> str:
         sub = self.media_dir / digest[:2]

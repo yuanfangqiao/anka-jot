@@ -27,12 +27,18 @@ export async function refreshPending() {
 }
 
 // ─── 媒体上传 ──────────────────────────────────────
+/** 归一化 mime：去掉 ;codecs= 参数（iOS 录音 blob.type 常带参数，服务端只认裸类型），空则按 kind 兜底 */
+function normMime(att: JotAtt, blob: Blob): string {
+  const t = (blob.type || '').split(';')[0].trim().toLowerCase()
+  return t || (att.kind === 'image' ? 'image/jpeg' : 'audio/mp4')
+}
+
 async function uploadAtt(att: JotAtt): Promise<boolean> {
   if (att.serverPath) return true
   const blob = await db.getBlob(att.id)
   if (!blob || !att.sha256) return false
   const begin = await callJot('upload_begin', {
-    attId: att.id, kind: att.kind, mime: att.kind === 'image' ? 'image/jpeg' : blob.type,
+    attId: att.id, kind: att.kind, mime: normMime(att, blob),
     size: blob.size, sha256: att.sha256,
   })
   if (begin?.exists) {
@@ -56,6 +62,11 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
 // ─── 推送 ──────────────────────────────────────────
 /** 单条 outbox 最大重试次数，超过即丢弃（死信），避免毒丸堵死整个队列 */
 const MAX_OUTBOX_ATTEMPTS = 5
+
+/** 轻量探活：stats 无参数无副作用，用于区分「服务端挂了」与「本条数据坏了」 */
+async function probeAlive(): Promise<boolean> {
+  try { await callJot('stats'); return true } catch { return false }
+}
 
 export async function pushOutbox(): Promise<void> {
   if (pushing || !syncState.online) return
@@ -91,9 +102,13 @@ export async function pushOutbox(): Promise<void> {
         changed = true
       } catch (e: any) {
         syncState.lastError = e?.message ?? String(e)
+        console.warn('[jot] outbox 推送失败:', it.type, it.noteId ?? '', syncState.lastError)
+        // 区分「服务端不可达」与「本条是坏数据」：探活失败 → 保序停推、不烧重试次数；
+        // 探活成功 → 毒丸烧一次重试并跳过续推（同笔记乱序由服务端 rev LWW 兜底收敛）
+        if (!(await probeAlive())) { syncState.backendUp = false; break }
         const dead = await db.outboxFail(it.seq!, MAX_OUTBOX_ATTEMPTS)
         if (dead) changed = true
-        break // 保序：失败即停，下轮重试
+        continue
       }
     }
     syncState.backendUp = true
@@ -104,6 +119,7 @@ export async function pushOutbox(): Promise<void> {
     pushing = false
     syncState.syncing = false
     await refreshPending()
+    if (syncState.pending === 0) syncState.lastError = '' // 队列排空即清除残留错误
     if (changed) onChanged?.() // 仅在队列确有变化时刷新 UI，避免每 60s 全量重渲染
   }
 }
@@ -167,9 +183,11 @@ export async function syncNow(): Promise<void> {
 let timer = 0
 const onOnline = () => { syncState.online = true; void syncNow() }
 const onOffline = () => { syncState.online = false }
+const onVisible = () => { if (!document.hidden) void syncNow() } // PWA 回前台主动补一轮
 export function startSyncLoop() {
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
+  document.addEventListener('visibilitychange', onVisible)
   void syncNow()
   timer = window.setInterval(() => { if (!document.hidden) void syncNow() }, 60_000)
 }
@@ -177,4 +195,5 @@ export function stopSyncLoop() {
   window.clearInterval(timer)
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
+  document.removeEventListener('visibilitychange', onVisible)
 }

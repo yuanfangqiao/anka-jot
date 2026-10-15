@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Home — 屏①：搜索、时间线卡片流、底部细长四入口工具条、置顶区。 */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useUi, type JotNote } from '../host'
 import { push } from '../lib/nav'
 import { sortedNotes, tags } from '../state/store'
@@ -31,28 +31,63 @@ const activeTag = ref('')
 const visibleFlow = computed(() =>
   activeTag.value ? flow.value.filter(n => n.tags.includes(activeTag.value)) : flow.value)
 
+/** 响应式列数（JS matchMedia，不赌宿主 md:/lg: 变体是否存在）：
+ *  手机 2 列 / ≥768px 3 列 / ≥1280px 4 列 */
+const colCount = ref(2)
+const MQ = ['(min-width: 1280px)', '(min-width: 768px)'] as const
+const mqs: MediaQueryList[] = []
+function syncCols() {
+  colCount.value = window.matchMedia(MQ[0]).matches ? 4
+    : window.matchMedia(MQ[1]).matches ? 3 : 2
+}
+onMounted(() => {
+  for (const q of MQ) {
+    const m = window.matchMedia(q)
+    m.addEventListener('change', syncCols)
+    mqs.push(m)
+  }
+  syncCols()
+})
+onBeforeUnmount(() => {
+  for (const m of mqs) m.removeEventListener('change', syncCols)
+  mqs.length = 0
+})
+
+/** 均分 N 列（短列优先，按数量近似；卡片高度未知时最稳的策略） */
+function splitCols(list: JotNote[], n: number): JotNote[][] {
+  const cols: JotNote[][] = Array.from({ length: n }, () => [])
+  for (const it of list) {
+    let min = 0
+    for (let i = 1; i < n; i++) if (cols[i].length < cols[min].length) min = i
+    cols[min].push(it)
+  }
+  return cols
+}
+
 /** 时间线按创建日分组：今天 / 昨天 / 10月3日…（排序已按 createdAt，分组必然连续）。
- *  双列手动拆分（短列优先），不依赖 CSS columns —— 部分宿主构建不含该工具类 */
+ *  N 列手动拆分（短列优先），不依赖 CSS columns —— 部分宿主构建不含该工具类 */
 const grouped = computed(() => {
-  const gs: { label: string; ref: number; colA: JotNote[]; colB: JotNote[] }[] = []
+  const gs: { label: string; ref: number; cols: JotNote[][] }[] = []
   for (const n of visibleFlow.value) {
     const last = gs[gs.length - 1]
     if (last && sameDay(last.ref, n.createdAt)) {
-      ;(last.colA.length <= last.colB.length ? last.colA : last.colB).push(n)
+      const cols = last.cols
+      let min = 0
+      for (let i = 1; i < cols.length; i++) if (cols[i].length < cols[min].length) min = i
+      cols[min].push(n)
     } else {
-      gs.push({ label: dayLabelFull(n.createdAt), ref: n.createdAt, colA: [n], colB: [] })
+      gs.push({ label: dayLabelFull(n.createdAt), ref: n.createdAt, cols: splitCols([n], colCount.value) })
     }
   }
   return gs
 })
-const pinnedA = computed(() => pinned.value.filter((_, i) => i % 2 === 0))
-const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
+const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
 </script>
 
 <template>
-  <div class="relative mx-auto flex h-full w-full max-w-2xl flex-col pt-2">
-    <!-- 滚动区（底部留白避让贴底工具条） -->
-    <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-20">
+  <div class="jot-container relative flex h-full flex-col pt-2">
+    <!-- 滚动区（底部留白避让悬浮胶囊工具条） -->
+    <div class="jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
       <!-- 搜索栏 -->
       <button
         type="button"
@@ -79,32 +114,22 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
       >{{ t.name }}</button>
     </div>
 
-    <!-- 置顶（双列） -->
+    <!-- 置顶（响应式 N 列） -->
     <section v-if="pinned.length">
-      <p class="mb-1.5 px-1 jot-fs-11 font-medium tracking-wide text-ink-2">置顶</p>
-      <div class="flex gap-2.5">
-        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
-          <NoteCard v-for="n in pinnedA" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
-        </div>
-        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
-          <NoteCard v-for="n in pinnedB" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
+      <div class="jot-date-sep"><span class="jot-date-sep-label">置顶</span></div>
+      <div class="jot-cols">
+        <div v-for="(col, ci) in pinnedCols" :key="ci" class="jot-col">
+          <NoteCard v-for="n in col" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
         </div>
       </div>
     </section>
 
-    <!-- 时间线（按天分组 + 手动双列瀑布流，日期分割线） -->
+    <!-- 时间线（按天分组 + 响应式 N 列瀑布流，日期分隔） -->
     <section v-for="(g, gi) in grouped" :key="g.label + gi">
-      <div class="mb-2 flex items-center gap-3 px-1">
-        <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
-        <span class="jot-fs-11 font-medium tracking-wide text-ink-2">{{ g.label }}</span>
-        <span class="h-px flex-1" style="background: rgba(60, 54, 44, 0.08)" />
-      </div>
-      <div class="flex gap-2.5">
-        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
-          <NoteCard v-for="n in g.colA" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
-        </div>
-        <div class="flex min-w-0 flex-1 flex-col gap-2.5">
-          <NoteCard v-for="n in g.colB" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
+      <div class="jot-date-sep"><span class="jot-date-sep-label">{{ g.label }}</span></div>
+      <div class="jot-cols">
+        <div v-for="(col, ci) in g.cols" :key="ci" class="jot-col">
+          <NoteCard v-for="n in col" :key="n.id" :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
         </div>
       </div>
     </section>
@@ -116,27 +141,20 @@ const pinnedB = computed(() => pinned.value.filter((_, i) => i % 2 === 1))
     />
     </div>
 
-    <!-- 四入口：全宽贴底细长工具条（分段控件质感），列表从其下方滚过。
-         关键视觉用内联样式：宿主构建可能未包含任意值/新工具类 -->
-    <footer
-      class="absolute inset-x-0 bottom-0"
-      :style="{
-        background: 'rgba(255, 255, 255, 0.78)',
-        backdropFilter: 'blur(20px) saturate(1.5)',
-        WebkitBackdropFilter: 'blur(20px) saturate(1.5)',
-        boxShadow: '0 -8px 24px -12px rgba(0, 0, 0, 0.10)',
-      }"
-    >
-      <div class="grid grid-cols-4">
+    <!-- 四入口：通栏方块工具条（jot-bar* 语义类，不赌宿主构建）。
+         圆角方块瓷贴 + 玻璃底栏，与宿主胶囊 dock 形状区分 -->
+    <footer class="jot-bar-wrap">
+      <div class="jot-bar">
         <button
-          v-for="(q, qi) in QUICK" :key="q.kind" type="button"
-          class="flex cursor-pointer flex-col items-center gap-1 py-2.5 transition-all duration-micro active:scale-95"
-          :style="qi > 0 ? { borderLeft: '1px solid rgba(60, 54, 44, 0.08)' } : undefined"
-          :class="'main' in q && q.main ? 'text-brand' : 'text-ink-2'"
+          v-for="q in QUICK" :key="q.kind" type="button"
+          class="jot-bar-item"
+          :class="'main' in q && q.main ? 'jot-bar-item-main' : ''"
           @click="emit('create', q.kind)"
         >
-          <component :is="icons[q.icon]" :size="22" :stroke-width="1.8" />
-          <span class="jot-fs-10 font-medium leading-tight">{{ q.label }}</span>
+          <span class="jot-bar-tile">
+            <component :is="icons[q.icon]" :size="19" :stroke-width="1.8" />
+          </span>
+          <span class="jot-bar-label">{{ q.label }}</span>
         </button>
       </div>
     </footer>
