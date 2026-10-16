@@ -3,11 +3,10 @@
  *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；图片卡 = 满幅封面（3:4，点图全屏预览）；
  *  视频卡 = 海报封面（3:4，▶ + 时长角标，点封面全屏播放）；语音卡 = 64px 矮条语音条；
  *  复合卡 = 3:4 上封面（图或视频海报）下文（封面点预览/播放、文区进详情）。 */
-import { computed, onMounted, ref } from 'vue'
-import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
-import { coverCache, coverOf } from '../state/store'
-import * as db from '../lib/db'
-import { backfillAtt } from '../lib/media'
+import { computed, ref } from 'vue'
+import { useUi, type JotAtt, type JotNote } from '../host'
+import { useMedia } from '../lib/useMedia'
+import MediaPreview from './MediaPreview.vue'
 import { dayLabel, fmtClock, fmtBytes, fmtDur } from '../lib/format'
 import { hashCardColor } from '../lib/color'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
@@ -65,32 +64,13 @@ const body = computed(() =>
 /** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
 const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
 
-/** 封面（图片卡/视频卡/复合卡需要；视频卡封面 = 海报帧）。
- *  响应式读取 covers 缓存：快照到达/拍摄后的重算结果立即反映到卡片，
- *  不再依赖组件重新 mount（:key 复用的旧卡片也能刷新） */
-const cover = computed(() => coverCache(props.note.id))
-const coverBroken = ref(false)
-onMounted(() => {
-  if (cardType.value !== 'voice' && cardType.value !== 'text') void coverOf(props.note.id)
-})
-
-/** 点击图片区 → 全屏预览（全图 blob 优先，服务端路径兜底） */
-const preview = ref<string | null>(null)
-async function openPreview() {
-  const a = imageAtts.value[0]
-  if (!a) return
-  preview.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath) ?? cover.value
-  if (preview.value && !preview.value.startsWith('blob:')) void backfillAtt(a) // 全图回填
-}
-
-/** 点击视频封面 → 全屏播放（本地 blob 优先，服务端路径兜底） */
-const playUrl = ref<string | null>(null)
-async function playVideo() {
-  const a = videoAtt.value
-  if (!a) return
-  playUrl.value = (await db.blobUrl(a.id)) ?? mediaUrl(a.serverPath)
-  if (playUrl.value && !playUrl.value.startsWith('blob:')) void backfillAtt(a) // 服务端兜底播放：回填本地
-}
+/** 查看器与封面独立持有原图 URL，后台恢复时重新解析。 */
+const previewAtt = ref<JotAtt | null>(null)
+const videoSelection = ref<JotAtt | null>(null)
+const { src: preview, failed: previewFailed } = useMedia(() => previewAtt.value, true)
+const { src: playUrl, failed: videoFailed } = useMedia(() => videoSelection.value, true)
+function openPreview() { previewAtt.value = imageAtts.value[0] ?? null }
+function playVideo() { videoSelection.value = videoAtt.value }
 
 /** 复合卡封面：有图用图，无图用视频海报 */
 const hasCover = computed(() => imageAtts.value.length > 0 || Boolean(videoAtt.value))
@@ -132,15 +112,7 @@ const timeLabel = computed(() =>
     <!-- 图片卡：满幅封面，点图预览 -->
     <template v-else-if="cardType === 'image'">
       <div class="jot-imgcard" @click.stop="openPreview">
-        <img
-          v-if="cover && !coverBroken"
-          :src="cover" alt="" loading="lazy"
-          @error="coverBroken = true"
-        />
-        <div v-else class="jot-cover-missing">
-          <component :is="icons.ImageOff" :size="20" />
-          <span>图片同步中…</span>
-        </div>
+        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
       </div>
       <div class="jot-card-foot">
@@ -159,15 +131,7 @@ const timeLabel = computed(() =>
     <!-- 视频卡：海报封面 + 中央 ▶ + 左下时长角标，点封面全屏播放 -->
     <template v-else-if="cardType === 'video'">
       <div class="jot-imgcard" @click.stop="playVideo">
-        <img
-          v-if="cover && !coverBroken"
-          :src="cover" alt="" loading="lazy"
-          @error="coverBroken = true"
-        />
-        <div v-else class="jot-cover-missing">
-          <component :is="icons.Film ?? icons.Play" :size="20" />
-          <span>视频同步中…</span>
-        </div>
+        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
         <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
         <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
       </div>
@@ -190,15 +154,7 @@ const timeLabel = computed(() =>
         v-if="hasCover" class="jot-comp-img"
         @click.stop="imageAtts.length ? openPreview() : playVideo()"
       >
-        <img
-          v-if="cover && !coverBroken"
-          :src="cover" alt="" loading="lazy"
-          @error="coverBroken = true"
-        />
-        <div v-else class="jot-cover-missing">
-          <component :is="icons.ImageOff" :size="20" />
-          <span>媒体同步中…</span>
-        </div>
+        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
         <template v-if="!imageAtts.length && videoAtt">
           <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
@@ -246,7 +202,7 @@ const timeLabel = computed(() =>
     </template>
 
     <!-- 全屏图片预览 / 视频播放（共用查看器） -->
-    <ImgViewer :src="preview" @close="preview = null" />
-    <VideoViewer :src="playUrl" @close="playUrl = null" />
+    <ImgViewer :src="preview" @close="previewAtt = null" @error="previewFailed" />
+    <VideoViewer :src="playUrl" @close="videoSelection = null" @error="videoFailed" />
   </article>
 </template>

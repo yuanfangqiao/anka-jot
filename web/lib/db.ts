@@ -28,7 +28,12 @@ function open(): Promise<IDBDatabase> {
         s.createIndex('noteId', 'noteId')
       }
     }
-    rq.onsuccess = () => res(rq.result)
+    rq.onsuccess = () => {
+      const connection = rq.result
+      connection.onclose = () => { dbp = null }
+      connection.onversionchange = () => { connection.close(); dbp = null }
+      res(connection)
+    }
     rq.onerror = () => { dbp = null; rej(rq.error) } // 打开失败不缓存，允许后续重试
   })
   return dbp
@@ -213,20 +218,14 @@ export async function outboxDrop(seq: number) {
   const d = await open()
   const t = d.transaction(T.outbox, 'readwrite'); t.objectStore(T.outbox).delete(seq); await done(t)
 }
-/** 记录一次失败：attempts+1；达到上限则删除（死信）。返回是否已被死信丢弃 */
+/** 失败计数封顶，但绝不删除未同步项；后续继续重试。 */
 export async function outboxFail(seq: number, maxAttempts: number): Promise<boolean> {
   const d = await open()
   const t = d.transaction(T.outbox, 'readwrite')
   const it = await req<OutboxItem | undefined>(t.objectStore(T.outbox).get(seq))
   if (!it) { await done(t); return true }
   const n = (it.attempts ?? 0) + 1
-  if (n >= maxAttempts) {
-    t.objectStore(T.outbox).delete(seq)
-    await done(t)
-    console.warn('[jot] outbox 死信丢弃:', it.type, it.noteId ?? it.name ?? '')
-    return true
-  }
-  t.objectStore(T.outbox).put({ ...it, attempts: n })
+  t.objectStore(T.outbox).put({ ...it, attempts: Math.min(n, maxAttempts) })
   await done(t)
   return false
 }

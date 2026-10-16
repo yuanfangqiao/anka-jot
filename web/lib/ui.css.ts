@@ -11,6 +11,11 @@ import { CSS_CARDS } from './ui.css.cards'
  *  命名前缀 jot-，避免与宿主样式冲突。 */
 
 const CSS = `
+.jot-media-preview { width: 100%; height: 100%; overflow: hidden; }
+.jot-media-preview > img, .jot-media-preview > video { width: 100%; height: 100%; object-fit: cover; }
+.jot-refresh-list { overscroll-behavior-y: contain; }
+.jot-refresh-status { flex-shrink: 0; overflow: hidden; text-align: center; color: var(--text-2); font-size: 12px; }
+
 /* ─── 快门 / 录音大按钮（72px 圆钮，替代 h-[72px]/w-[72px]/border-[5px]/inset-[5px]） ─── */
 .jot-shutter {
   position: relative;

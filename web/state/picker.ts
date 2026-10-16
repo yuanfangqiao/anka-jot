@@ -1,8 +1,8 @@
 /** picker.ts — 详情页附件采集处理：相册导入 / 拍照回传 / 录像回传。
- *  图片走压缩管线，视频抽封面帧（100MB 上限守卫），统一 invalidateCover + dirty + toast。 */
+ *  图片走压缩管线，视频抽封面帧（100MB 上限守卫），统一更新附件 + dirty + toast。 */
 import type { Ref } from 'vue'
 import { toast, type JotAtt, type JotNote } from '../host'
-import { attachImage, attachVideo, invalidateCover } from './store'
+import { attachImage, attachVideo } from './store'
 import { VIDEO_MAX_BYTES, isVideoFile } from '../lib/video'
 
 export function usePicker(note: Ref<JotNote | null>, atts: Ref<JotAtt[]>, dirty: () => void) {
@@ -26,7 +26,6 @@ export function usePicker(note: Ref<JotNote | null>, atts: Ref<JotAtt[]>, dirty:
     let n = 0
     for (const f of Array.from(files)) if (await add(f)) n++
     if (!n) return
-    invalidateCover(note.value.id)
     dirty()
     toast(doneText(n))
   }

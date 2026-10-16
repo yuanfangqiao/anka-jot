@@ -2,7 +2,7 @@
 
 > 本目录是 anka 的应用插件。在此工作前：先读本文件 → `README.md`（工程规则）→ `DESIGN.md`（设计契约）。
 > 宿主通用红线（≤300 行、单一根元素、禁 `mode="out-in"`、副作用可逆）以仓库根 `AGENT.md` 为准，本文件只补插件私有规则。
-> 最后更新：2026-10-16
+> 最后更新：2026-10-17
 
 ## 1. 文档地图
 
@@ -29,6 +29,10 @@
 8. **`data/` 是运行时数据**：不提交、不手改、不往代码里写死其内容（已 gitignore）。
 9. **不改宿主内核**：确需宿主配合的改动（如 share_target、SW 注入）按 DESIGN §0 白名单流程提评审，不顺手改。
 10. **系统返回经宿主分发**：`lib/nav.ts` 维护 Jot 内部栈，通过 `uiCtx.navigation.register` 注册返回；hash 经 `setHash('anka-jot', ...)` 镜像，禁止监听顶层 `popstate` 或覆盖路由器 history.state。切应用保留本插件栈，teardown 注销。完整协议见宿主 `docs/NAVIGATION.md`。
+
+11. **媒体可用性优先**：有本地/服务端大图即直接显示，缩略图不可成为保存或预览前置条件；用 `useMedia` 独立持有 object URL，不得撤销 db 缓存所有的 URL。图片失败必须有回退与恢复重试，禁止永久锁死 broken 状态。
+12. **PWA 恢复必须重试媒体**：visibilitychange 可见、pageshow、online、冷启动和下拉刷新触发附件对账；相同 note rev 也补缺失路径。本地待传编辑不得被远端覆盖。
+13. **只有一条同步写路径**：先 IDB + outbox，后媒体上传，再 upsert_note；禁止绕开 outbox 写穿透或失败五次后删除队列。同步请求应可超时，UI 不等待上传完成。
 
 ## 3. 标准工作流
 
@@ -66,7 +70,7 @@ sqlite3 plugins/anka-jot/data/jot.db   # 服务端库直查
 | 术语 | 含义 |
 |------|------|
 | outbox | IndexedDB 内的有序同步队列（seq 保序） |
-| 毒丸 | 连续失败 5 次转死信的 outbox 记录，不堵队 |
+| 失败项 | 失败计数最多 5，条目保留并重试，不阻塞其他笔记；不得静默删除 |
 | LWW | Last-Write-Win，按 rev/updatedAt 收敛冲突 |
 | 方案 B | 纯 `/call` 轮询推拉同步（当前实现），区别于 `ctx.sync` WS 实时通道（📋） |
 | MicSession | 会话级持久麦克风流，iOS 修复方案，见 `lib/audio.ts` |

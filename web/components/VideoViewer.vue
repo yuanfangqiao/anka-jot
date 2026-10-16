@@ -6,7 +6,7 @@ import { useUi } from '../host'
 import { useBack } from '../lib/useBack'
 
 const props = defineProps<{ src: string | null }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; error: [] }>()
 const icons = useUi().icons
 useBack(() => Boolean(props.src), () => emit('close'))
 
@@ -26,7 +26,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       @click="emit('close')"
     >
       <video
-        :src="src" class="max-h-full max-w-full" controls autoplay playsinline preload="metadata"
+        :src="src" @error="emit('error')" class="max-h-full max-w-full" controls autoplay playsinline preload="metadata"
         @click.stop
       />
       <button

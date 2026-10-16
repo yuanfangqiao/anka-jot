@@ -3,20 +3,31 @@
  *  回填只为「下次离线也能看」——拉回的 blob 自然进入 LRU 管辖（超 20 个被淘汰）。 */
 import { mediaUrl, type JotAtt } from '../host'
 import * as db from './db'
-import { syncState } from './sync'
 
-/** 本地缺失时从服务端拉回缓存；在线才回填，失败静默（下次触发再试） */
-export async function backfillAtt(att: JotAtt, kind: 'full' | 'thumb' = 'full') {
-  if (!syncState.online) return
+
+const inflight = new Map<string, Promise<void>>()
+/** 显示不依赖回填；同一附件合并下载，超时覆盖响应体读取。 */
+export function backfillAtt(att: JotAtt, kind: 'full' | 'thumb' = 'full'): Promise<void> {
   const key = kind === 'thumb' ? att.id + ':thumb' : att.id
-  if (await db.getBlob(key)) return
-  const url = mediaUrl(kind === 'thumb' ? att.thumbPath : att.serverPath)
-  if (!url) return
+  if (!navigator.onLine) return Promise.resolve()
+  const pending = inflight.get(key)
+  if (pending) return pending
+  const task = fill(att, key, kind).finally(() => inflight.delete(key))
+  inflight.set(key, task)
+  return task
+}
+async function fill(att: JotAtt, key: string, kind: 'full' | 'thumb') {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60_000)
   try {
-    const r = await fetch(url)
-    if (!r.ok) return
+    if (await db.getBlob(key)) return
+    const url = mediaUrl(kind === 'thumb' ? att.thumbPath : att.serverPath)
+    if (!url) return
+    const r = await fetch(url, { signal: controller.signal, cache: 'no-cache' })
+    if (!r.ok || r.headers.get('content-type')?.includes('text/html')) return
     await db.putBlob(key, await r.blob())
-  } catch { /* 网络失败静默 */ }
+  } catch { /* 下次恢复或显示时重试 */ }
+  finally { clearTimeout(timer) }
 }
 
 /** 缩略图预热：在线时把本地缺失的封面缩略图立即从服务端拉回——「打开即可预览」，
@@ -24,7 +35,7 @@ export async function backfillAtt(att: JotAtt, kind: 'full' | 'thumb' = 'full') 
  *  由 syncNow（60s 心跳/回网/回前台）反复触发直至补齐 */
 let prewarming = false
 export async function prewarmThumbs(limit = 60): Promise<void> {
-  if (!syncState.online || prewarming) return
+  if (!navigator.onLine || prewarming) return
   prewarming = true
   try {
     const atts = await db.allAtts()

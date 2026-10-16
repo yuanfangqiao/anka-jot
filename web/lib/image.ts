@@ -1,7 +1,7 @@
 /** image.ts — 图片管线：压缩（≤2048px）、缩略图（480px）、sha256。canvas 手写，零依赖。 */
 
 export interface ImageOut {
-  full: Blob; thumb: Blob; width: number; height: number
+  full: Blob; thumb: Blob | null; width: number; height: number
   mime: string; sha256: string
 }
 
@@ -45,9 +45,10 @@ export async function sha256Hex(b: Blob): Promise<string> {
 export async function processImage(src: Blob): Promise<ImageOut> {
   const bmp = await toBitmap(src)
   const full = await drawScaled(bmp, MAX_EDGE, Q_FULL)
-  const thumb = await drawScaled(bmp, THUMB_EDGE, Q_THUMB)
+  // 缩略图只是优化：生成失败也必须保存并展示大图。
+  const thumb = await drawScaled(bmp, THUMB_EDGE, Q_THUMB).catch(() => null)
   if ('close' in bmp) (bmp as ImageBitmap).close()
-  return { full: full.blob, thumb: thumb.blob, width: full.w, height: full.h, mime: 'image/jpeg', sha256: await sha256Hex(full.blob) }
+  return { full: full.blob, thumb: thumb?.blob ?? null, width: full.w, height: full.h, mime: 'image/jpeg', sha256: await sha256Hex(full.blob) }
 }
 
 /** Blob → base64（分块上传用） */

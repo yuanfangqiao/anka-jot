@@ -7,6 +7,8 @@ import { callJot, type JotAtt, type JotNote } from '../host'
 import * as db from './db'
 import { blobToB64 } from './image'
 import { prewarmThumbs } from './media'
+import { refreshMedia } from './useMedia'
+import { mergeMediaPaths, recoverPending } from './syncRecovery'
 
 const CHUNK = 768 * 1024 // base64 前原始字节/块
 
@@ -19,9 +21,9 @@ export const syncState = reactive({
   lastPullRev: 0,
 })
 
-let pushing = false
-let onChanged: (() => void) | null = null
-export function onSyncChanged(fn: () => void) { onChanged = fn }
+let pushing: Promise<void> | null = null
+let onChanged: (() => void | Promise<void>) | null = null
+export function onSyncChanged(fn: () => void | Promise<void>) { onChanged = fn }
 
 export async function refreshPending() {
   syncState.pending = await db.outboxCount()
@@ -62,7 +64,7 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
 }
 
 // ─── 推送 ──────────────────────────────────────────
-/** 单条 outbox 最大重试次数，超过即丢弃（死信），避免毒丸堵死整个队列 */
+/** 失败计数封顶，失败项保留供后续恢复，不阻塞其他条目。 */
 const MAX_OUTBOX_ATTEMPTS = 5
 
 /** 本地已同步全量 blob 的 LRU 上限（缩略图不计；未同步附件不参与淘汰） */
@@ -83,11 +85,15 @@ async function probeAlive(): Promise<boolean> {
   try { await callJot('stats'); return true } catch { return false }
 }
 
-export async function pushOutbox(): Promise<void> {
-  if (pushing || !syncState.online) return
-  pushing = true
+export function pushOutbox(): Promise<void> {
+  if (!syncState.online) return Promise.resolve()
+  return pushing ??= drainOutbox().finally(() => { pushing = null })
+}
+
+async function drainOutbox(): Promise<void> {
   syncState.syncing = true
   let changed = false
+  let failed = false
   try {
     const items = await db.outboxAll()
     for (const it of items) {
@@ -105,7 +111,13 @@ export async function pushOutbox(): Promise<void> {
           }
           const fresh = await db.attsOf(note.id)
           const r = await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })
-          if (r?.applied) await markSynced(it.noteId, r.serverRev)
+          if (r?.applied) await markSynced(note, r.serverRev)
+          else {
+            if (r?.note) await db.putHistory(r.note)
+            const latest = await db.getNote(note.id)
+            if (latest && r?.serverRev) await db.saveNote({ ...latest, rev: r.serverRev }, false)
+            throw new Error('笔记版本已变化，保留本地编辑并等待重试')
+          }
         } else if (it.type === 'note.delete' && it.noteId) {
           await callJot('delete_note', { id: it.noteId })
         } else if (it.type === 'tag.upsert' && it.name) {
@@ -116,27 +128,27 @@ export async function pushOutbox(): Promise<void> {
         await db.outboxDrop(it.seq!)
         changed = true
       } catch (e: any) {
+        failed = true
         syncState.lastError = e?.message ?? String(e)
         console.warn('[jot] outbox 推送失败:', it.type, it.noteId ?? '', syncState.lastError)
         // 区分「服务端不可达」与「本条是坏数据」：探活失败 → 保序停推、不烧重试次数；
         // 探活成功 → 毒丸烧一次重试并跳过续推（同笔记乱序由服务端 rev LWW 兜底收敛）
         if (!(await probeAlive())) { syncState.backendUp = false; break }
-        const dead = await db.outboxFail(it.seq!, MAX_OUTBOX_ATTEMPTS)
-        if (dead) changed = true
+        // 保留失败项及媒体，禁止五次失败后静默丢弃待同步数据。
+        await db.outboxFail(it.seq!, MAX_OUTBOX_ATTEMPTS)
         continue
       }
     }
-    syncState.backendUp = true
+    if (!failed) syncState.backendUp = true
     await trimSyncedBlobs() // 在线才裁：离线时本地 blob 是唯一副本
   } catch (e: any) {
     syncState.backendUp = false
     syncState.lastError = e?.message ?? String(e)
   } finally {
-    pushing = false
     syncState.syncing = false
     await refreshPending()
     if (syncState.pending === 0) syncState.lastError = '' // 队列排空即清除残留错误
-    if (changed) onChanged?.() // 仅在队列确有变化时刷新 UI，避免每 60s 全量重渲染
+    if (changed) await onChanged?.() // 仅在队列确有变化时刷新 UI，避免每 60s 全量重渲染
   }
 }
 
@@ -148,35 +160,40 @@ export function stripAtt(a: JotAtt) {
   const { pendingOcr: _p, ...rest } = a as any
   return rest
 }
-async function markSynced(noteId: string, serverRev?: number) {
-  const n = await db.getNote(noteId)
+async function markSynced(sent: JotNote, serverRev?: number) {
+  const n = await db.getNote(sent.id)
   if (!n) return
   const rev = serverRev ?? n.rev ?? 0
   if (n.syncState === 'synced' && n.rev === rev) return
-  await db.saveNote({ ...n, syncState: 'synced', rev }, false)
+  await db.saveNote({ ...n, syncState: n.updatedAt === sent.updatedAt ? 'synced' : 'local', rev }, false)
 }
 
 // ─── 拉取合并 ──────────────────────────────────────
-export async function pullMerge(): Promise<number> {
-  let since = (await db.kvGet<number>('lastPullRev')) ?? 0
+export async function pullMerge(full = false): Promise<number> {
+  let since = full ? 0 : (await db.kvGet<number>('lastPullRev')) ?? 0
   let applied = 0
   for (let page = 0; page < 50; page++) {
     const snap = await callJot('snapshot', { sinceRev: since, limit: 500 })
     for (const sn of snap.notes ?? []) {
       const local = await db.getNote(sn.id)
+      if (local && await mergeMediaPaths(sn)) applied++
       // 本地有未推送编辑：服务端版本不覆盖，避免丢本地改动（服务端版本留档兜底）
       if (local && local.syncState === 'local') {
         await db.putHistory({ ...sn })
         continue
       }
-      if (local && sn.rev <= (local.rev ?? 0)) continue
+      if (local && sn.rev < (local.rev ?? 0)) continue
       const note: JotNote = { ...sn, syncState: 'synced' }
       await db.saveNote(note, false)
       // 附件差集：服务端已没有的本地附件（及 blob）删除，防孤儿数据
       const localAtts = await db.attsOf(sn.id)
       const serverIds = new Set((sn.atts ?? []).map(a => a.id))
       for (const a of localAtts) if (!serverIds.has(a.id)) await db.delAtt(a.id)
-      for (const a of sn.atts ?? []) await db.putAtt(a)
+      for (const a of sn.atts ?? []) {
+        const previous = localAtts.find(old => old.id === a.id && old.sha256 === a.sha256)
+        await db.putAtt({ ...a, serverPath: a.serverPath || previous?.serverPath,
+          thumbPath: a.thumbPath || previous?.thumbPath })
+      }
       applied++
     }
     // 水位取本页最大 rev（服务端全局 serverRev 含被拒写的 rev，不能直接采用）
@@ -185,32 +202,63 @@ export async function pullMerge(): Promise<number> {
     syncState.lastPullRev = since
     if (!snap.hasMore) break
   }
-  if (applied) onChanged?.()
+  if (applied) await onChanged?.()
   return applied
 }
 
-export async function syncNow(): Promise<void> {
-  if (!syncState.online) { await refreshPending(); return }
-  await pushOutbox()
-  try { await pullMerge() } catch { /* 拉取失败不阻塞本地使用 */ }
-  void prewarmThumbs() // 立即拉回缺失的封面缩略图：打开即可预览，离线前提前缓存
+let syncing: Promise<void> | null = null
+let repairRequested = false
+export function syncNow(full = false): Promise<void> {
+  repairRequested ||= full
+  if (syncing) return syncing
+  syncing = (async () => {
+    do {
+      const repair = repairRequested
+      repairRequested = false
+      syncState.online = navigator.onLine
+      if (repair) refreshMedia() // 普通心跳不打断正在播放的视频。
+      if (!syncState.online) { await refreshPending(); return }
+      try {
+        if (repair) { await recoverPending(); await pullMerge(true) }
+        await pushOutbox()
+        await pullMerge()
+        syncState.backendUp = true
+        if (!syncState.pending) syncState.lastError = ''
+      } catch (e: any) {
+        syncState.backendUp = false
+        syncState.lastError = e?.message ?? String(e)
+      }
+      if (repair) await onChanged?.()
+      void prewarmThumbs()
+    } while (repairRequested)
+  })().finally(() => { syncing = null })
+  return syncing
 }
 
 // ─── 生命周期 ──────────────────────────────────────
 let timer = 0
-const onOnline = () => { syncState.online = true; void syncNow() }
+let resumeTimer = 0
+const onOnline = () => { syncState.online = true; resume() }
 const onOffline = () => { syncState.online = false }
-const onVisible = () => { if (!document.hidden) void syncNow() } // PWA 回前台主动补一轮
+function resume() {
+  if (document.hidden) return
+  window.clearTimeout(resumeTimer)
+  resumeTimer = window.setTimeout(() => { void syncNow(true) }, 150)
+}
 export function startSyncLoop() {
+  stopSyncLoop()
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
-  document.addEventListener('visibilitychange', onVisible)
-  void syncNow()
+  window.addEventListener('pageshow', resume)
+  document.addEventListener('visibilitychange', resume)
+  void syncNow(true)
   timer = window.setInterval(() => { if (!document.hidden) void syncNow() }, 60_000)
 }
 export function stopSyncLoop() {
   window.clearInterval(timer)
+  window.clearTimeout(resumeTimer)
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
-  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('pageshow', resume)
+  document.removeEventListener('visibilitychange', resume)
 }

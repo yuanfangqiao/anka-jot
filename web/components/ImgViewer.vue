@@ -6,7 +6,7 @@ import { useUi } from '../host'
 import { useBack } from '../lib/useBack'
 
 const props = defineProps<{ src: string | null }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; error: [] }>()
 const icons = useUi().icons
 useBack(() => Boolean(props.src), () => emit('close'))
 
@@ -25,7 +25,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
       @click="emit('close')"
     >
-      <img :src="src" class="max-h-full max-w-full rounded-lg object-contain" alt="图片预览" />
+      <img @error="emit('error')" :src="src" class="max-h-full max-w-full rounded-lg object-contain" alt="图片预览" />
       <button
         type="button"
         class="absolute right-4 top-4 cursor-pointer rounded-full bg-white/15 p-2 text-white backdrop-blur"

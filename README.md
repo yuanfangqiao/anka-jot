@@ -21,8 +21,8 @@ UI 读写 ──► IndexedDB（唯一事实源）
         pullMerge()  snapshot(sinceRev) 增量拉取，rev 大者胜（笔记级 LWW）
 ```
 
-- **毒丸不堵队**：单条失败先 `stats` 探活——服务端不可达则保序停推（不烧重试次数）；
-  服务端活着则本条计一次失败并**跳过续推**（同笔记乱序由服务端 rev LWW 兜底收敛），5 次转死信。
+- **失败项保留**：失败先探活，服务端不可达则停推；单条失败跳过续推，计数最多 5，始终保留待同步项。
+- **单一写路径**：取消编辑时的直接写穿透；原图上传成功才发送笔记与附件地址，避免提前显示已同步。
 - **mime 归一化**：上传前两端都把 `blob.type` 的 `;codecs=` 参数剥掉再查扩展名
   （iOS Safari 录音 blob 常是 `audio/mp4;codecs=mp4a.40.2`，曾让整条队列卡死）；
   未识别 mime 按 kind 兜底扩展名，不再判非法。
@@ -30,7 +30,10 @@ UI 读写 ──► IndexedDB（唯一事实源）
 - **本地未推送编辑保护**：拉取时若本地 `syncState === 'local'`，服务端版本只进历史留档，不覆盖。
 - **触发时机**：`online` 事件 + `visibilitychange` 回前台 + 60s 前台心跳 + 手动（banner「同步」按钮，
   结果 toast 反馈，失败原因直接显示在 banner 里）。
-- **UI 刷新节流**：仅当队列/数据确有变化才回调 `onChanged`，避免每 60s 全量重渲染。
+- **恢复修复**：冷启动、pageshow、回前台、联网及手动下拉时全量核对附件路径；相同 rev 也补路径，保护本地正文与附件增删。普通心跳仍按增量同步。
+- **请求可恢复**：同步调用与媒体缓存下载 60 秒超时；需要宿主支持 callApp 第四参数 AbortSignal。
+- **预览独立**：`useMedia` + `MediaPreview` 原图优先、失败回退，各组件持有并释放自己的 object URL；没有视频海报时加载原片，回前台重新创建媒体元素。缩略图生成失败不影响保存。
+- **下拉刷新**：首页列表顶部单指向下拉，松开后刷新本地卡片、同步和重试媒体；离线保留本地内容。
 
 ### 2. iOS 录音无声修复 — MicSession（`web/lib/audio.ts`）
 
@@ -116,6 +119,8 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` | 首页通栏方块工具条（圆角方块瓷贴，与宿主胶囊 dock 区分） |
 | `jot-date-sep` | 时间线日期分隔（双侧渐变细线 + 加粗标签） |
 | `jot-cover-missing` | 封面图加载失败渐变占位 |
+| `jot-media-preview` | 图片/视频封面填满卡片，大图优先，失败逐级回退 |
+| `jot-refresh-list` / `jot-refresh-status` | 列表内下拉刷新与状态提示，隔离浏览器页面刷新 |
 | `jot-overlay-blur` / `jot-safe-bottom` / `jot-sheet-maxh` | Sheet 弹层 |
 | `jot-rail` / `jot-dot` | 日历时间轴定位 |
 | `jot-scan-*` | 扫描参考框 |

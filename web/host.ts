@@ -7,7 +7,7 @@ export interface UiLike {
   vue: any
   components: Record<string, any>
   icons: Record<string, any>
-  api: { callApp: (id: string, method: string, args?: Record<string, unknown>) =>
+  api: { callApp: (id: string, method: string, args?: Record<string, unknown>, options?: { signal?: AbortSignal }) =>
     Promise<{ ok: boolean; result: any }> }
   toast: { ok: (m: string) => void; err?: (m: string) => void; info?: (m: string) => void }
   layout: { isMobile: { value: boolean }; isWide: { value: boolean } }
@@ -64,13 +64,17 @@ function _argDigest(args: Record<string, unknown>): string {
 }
 
 export async function callJot<T = any>(method: string, args: Record<string, unknown> = {}): Promise<T> {
+  // 只约束同步请求；AI/OCR 等长任务保持原行为。
+  const bounded = /^(snapshot|stats|upload_.*|upsert_note|delete_note|upsert_tag)$/.test(method)
+  const controller = new AbortController()
+  const timer = bounded ? setTimeout(() => controller.abort(), 60_000) : null
   try {
-    const r = await useUi().api.callApp('anka-jot', method, args)
+    const r = await useUi().api.callApp('anka-jot', method, args, { signal: controller.signal })
     return r?.result as T
   } catch (e) {
     console.error('[jot] call ✗', method, _argDigest(args), e)
     throw e
-  }
+  } finally { if (timer !== null) clearTimeout(timer) }
 }
 
 export const MEDIA_BASE = '/plugins/anka-jot/'

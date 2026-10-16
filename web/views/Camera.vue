@@ -4,7 +4,7 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useUi, type JotAtt, type JotNote } from '../host'
 import { pop } from '../lib/nav'
-import { attachImage, coverOf, invalidateCover, newNote, saveDebounced } from '../state/store'
+import { attachImage, newNote, saveDebounced } from '../state/store'
 import { blobUrl } from '../lib/db'
 
 const props = defineProps<{ noteId?: string }>()
@@ -33,7 +33,7 @@ const fileInput = ref<HTMLInputElement>()
 const shots = ref<JotAtt[]>([])
 const shotThumbs = ref<string[]>([])
 watch(shots, async ss => {
-  shotThumbs.value = (await Promise.all(ss.slice(-3).map(s => blobUrl(s.id + ':thumb')))).filter(Boolean) as string[]
+  shotThumbs.value = (await Promise.all(ss.slice(-3).map(async s => (await blobUrl(s.id)) ?? blobUrl(s.id + ':thumb')))).filter(Boolean) as string[]
 })
 const busy = ref(false)
 let stream: MediaStream | null = null
@@ -121,8 +121,6 @@ async function pickNative(files: FileList | null) {
 async function finish() {
   stream?.getTracks().forEach(t => t.stop()); stream = null
   if (realNoteId) {
-    invalidateCover(realNoteId)
-    void coverOf(realNoteId) // 失效后立即重算：追加拍摄的卡片（组件复用）响应式换新封面
     emit('done', realNoteId)
     pop()
   } else pop()

@@ -7,9 +7,12 @@ import { sortedNotes, tags } from '../state/store'
 import { dayLabelFull, sameDay } from '../lib/format'
 import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
+import { usePullRefresh } from '../lib/usePullRefresh'
 
 const emit = defineEmits<{ create: [kind: 'text' | 'camera' | 'video' | 'album' | 'voice'] }>()
 const icons = useUi().icons
+const list = ref<HTMLElement | null>(null)
+const { distance, refreshing, label } = usePullRefresh(list)
 
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
 
@@ -88,7 +91,9 @@ const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
 <template>
   <div class="jot-container relative flex h-full flex-col pt-2">
     <!-- 滚动区（底部留白避让悬浮胶囊工具条） -->
-    <div class="jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
+    <div ref="list" class="jot-refresh-list jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
+      <div v-if="distance || refreshing" class="jot-refresh-status" role="status"
+        :style="{ height: distance + 'px', lineHeight: distance + 'px' }">{{ label }}</div>
       <!-- 搜索栏 -->
       <button
         type="button"

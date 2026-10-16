@@ -2,13 +2,12 @@
  *  一切写操作先落 IndexedDB（设备端事实源），同步由 lib/sync 后台接力。 */
 import { computed, reactive, ref } from 'vue'
 import type { JotAtt, JotNote, JotTag } from '../host'
-import { callJot, mediaUrl, TAG_COLORS } from '../host'
+import { callJot, TAG_COLORS } from '../host'
 import * as db from '../lib/db'
-import { backfillAtt } from '../lib/media'
 import { processImage, sha256Hex } from '../lib/image'
 import { processVideo } from '../lib/video'
 import { SearchIndex } from '../lib/search'
-import { refreshPending, onSyncChanged, stripAtt, stripLocal } from '../lib/sync'
+import { refreshPending, onSyncChanged, pushOutbox } from '../lib/sync'
 
 export const index = new SearchIndex()
 
@@ -35,7 +34,7 @@ export async function initStore() {
   settings.locationOn = (await db.kvGet<boolean>('locationOn')) ?? true
   settings.lang = (await db.kvGet<string>('lang')) ?? 'zh-CN'
   await refreshPending()
-  onSyncChanged(() => { void reload() })
+  onSyncChanged(reload)
   ready.value = true
 }
 
@@ -45,14 +44,7 @@ export async function reload() {
   notes.value = ns
   tags.value = await db.listTags()
   for (const n of ns) index.upsert(n, n.atts ?? [])
-  // 快照合并后立即重算封面：离线启动时算不出的（无 serverPath）此刻元数据已到，
-  // 卡片是响应式读取（coverCache），重算结果直接反映到列表——「拉到即显示」
-  for (const n of ns) {
-    if ((n.atts ?? []).some(a => a.kind === 'image' || a.kind === 'video')) {
-      invalidateCover(n.id)
-      void coverOf(n.id)
-    }
-  }
+  // 媒体组件观察附件元数据，自行更新展示来源。
   await refreshPending()
 }
 
@@ -105,24 +97,8 @@ async function persist(note: JotNote) {
   if (i >= 0) { notes.value[i] = { ...next } } else { notes.value.push({ ...next }) }
   index.upsert(next, atts)
   for (const t of next.tags) await ensureTag(t)
-  await pushThrough(next, atts)
+  void pushOutbox()
   await refreshPending()
-}
-
-/** 写穿透：编辑即直写服务端 SQLite；失败静默，由 outbox/同步引擎兜底 */
-async function pushThrough(note: JotNote, atts: JotAtt[]) {
-  try {
-    const r = await callJot('upsert_note', { note: stripLocal(note), atts: atts.map(stripAtt) })
-    // 仅当服务端采纳了我们的版本才更新 rev/状态；applied=false 时保留本地编辑，交由同步引擎拉取裁决
-    if (r?.applied) {
-      const next = { ...note, rev: r.serverRev, syncState: 'synced' as const }
-      await db.saveNote(next, false)
-      const i = notes.value.findIndex(n => n.id === next.id)
-      if (i >= 0) notes.value[i] = { ...next }
-      // 附件媒体尚未上传时保留 outbox 条目，交由同步引擎补传
-      if (atts.every(a => a.serverPath)) await db.outboxDropNote(note.id)
-    }
-  } catch { /* 离线或后端不可用：outbox 兜底 */ }
 }
 
 export async function togglePin(note: JotNote) {
@@ -137,7 +113,6 @@ export async function removeNote(note: JotNote) {
   await db.tombstone(note.id)
   notes.value = notes.value.filter(n => n.id !== note.id)
   index.remove(note.id)
-  invalidateCover(note.id)
   try {
     await callJot('delete_note', { id: note.id })
     await db.outboxDropNote(note.id)
@@ -153,7 +128,7 @@ export async function attachImage(noteId: string, src: Blob, pendingOcr = false)
     width: p.width, height: p.height, size: p.full.size, createdAt: Date.now(), pendingOcr,
   }
   await db.putBlob(att.id, p.full)
-  await db.putBlob(att.id + ':thumb', p.thumb)
+  if (p.thumb) await db.putBlob(att.id + ':thumb', p.thumb)
   await db.putAtt(att)
   await touchNote(noteId)
   return att
@@ -197,11 +172,13 @@ async function touchNote(noteId: string) {
   if (!n) return
   n.updatedAt = Date.now()
   n.syncState = 'local'
+  n.atts = await db.attsOf(noteId)
   await db.saveNote(n, true)
   const i = notes.value.findIndex(x => x.id === noteId)
   if (i >= 0) { notes.value[i] = { ...n } }
-  index.upsert(n, await db.attsOf(noteId))
+  index.upsert(n, n.atts)
   await refreshPending()
+  void pushOutbox()
 }
 
 export async function updateAtt(att: JotAtt) {
@@ -237,46 +214,6 @@ export function captureLocation(note: JotNote) {
     () => { /* 拒绝/超时静默 */ },
     { timeout: 3000, maximumAge: 300_000 },
   )
-}
-
-// ─── 封面/摘要（卡片渲染用） ───────────────────────
-const covers = reactive(new Map<string, string | null>())
-export async function coverOf(noteId: string): Promise<string | null> {
-  if (covers.has(noteId)) return covers.get(noteId)!
-  const atts = await db.attsOf(noteId)
-  const img = atts.find(a => a.kind === 'image')
-  let url: string | null = null
-  let att: JotAtt | null = null
-  if (img) {
-    att = img
-    // 本地缓存优先；LRU 淘汰/新设备/清库后用服务端缩略图兜底，保证列表永远可预览
-    url = (await db.blobUrl(img.id + ':thumb')) ?? (await db.blobUrl(img.id))
-      ?? mediaUrl(img.thumbPath) ?? mediaUrl(img.serverPath)
-  } else {
-    // 无图时用视频封面帧（':thumb'）做卡片封面
-    const vid = atts.find(a => a.kind === 'video')
-    if (vid) {
-      att = vid
-      url = (await db.blobUrl(vid.id + ':thumb')) ?? mediaUrl(vid.thumbPath)
-    }
-  }
-  // 走了服务端兜底：后台拉回缩略图进本地缓存（下次离线也能看）
-  if (url && att && !url.startsWith('blob:')) void backfillAtt(att, 'thumb')
-  // null 不缓存：离线启动算不出封面（无 serverPath）时留待快照到达后重算；
-  // 缓存 null 会让封面永久空白（invalidateCover 只有删除/拍照才触发）
-  if (url) covers.set(noteId, url)
-  else covers.delete(noteId)
-  return url
-}
-
-/** 响应式读取封面缓存：卡片 computed 用，重算/失效自动刷新 UI */
-export function coverCache(noteId: string): string | null {
-  return covers.get(noteId) ?? null
-}
-export function invalidateCover(noteId: string) {
-  const url = covers.get(noteId)
-  if (url) URL.revokeObjectURL(url) // 释放 object URL，防会话内泄漏
-  covers.delete(noteId)
 }
 
 export function hasAudio(atts?: JotAtt[]): boolean {
