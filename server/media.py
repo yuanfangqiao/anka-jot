@@ -7,7 +7,10 @@
 
 import base64
 import hashlib
+import importlib.util
 import logging
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,7 +44,13 @@ def _ext_for(kind: str, mime: str) -> str:
 
 
 class MediaStore:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, thumbnails=None):
+        if thumbnails is None:
+            spec = importlib.util.spec_from_file_location('jot_thumbnails', Path(__file__).with_name('thumbnails.py'))
+            thumbnails = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(thumbnails)
+        self.data_dir = data_dir.resolve()
+        self.thumbnails = thumbnails
         self.media_dir = data_dir / 'media'
         self.media_dir.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, dict] = {}
@@ -79,19 +88,74 @@ class MediaStore:
         if digest != s['sha256']:
             raise ValueError('sha256 校验失败')
         rel = self._write(digest, s['ext'], buf)
-        thumb_rel = None
-        if thumb_b64:
-            thumb_rel = self._write(digest, 'thumb.jpg',
-                                    base64.b64decode(thumb_b64))
-        return {'ok': True, 'path': rel, 'thumbPath': thumb_rel,
+        thumb = self.try_thumbnail(rel, s['kind'], thumb_b64)
+        return {'ok': True, 'path': rel, **thumb,
                 'sha256': digest, 'size': len(buf), 'kind': s['kind']}
+
+    def has_file(self, path: str) -> bool:
+        try:
+            self._source(path)
+            return True
+        except ValueError:
+            return False
+
+    def _source(self, path: str) -> Path:
+        if not isinstance(path, str) or not path.startswith('data/media/'):
+            raise ValueError('媒体文件路径非法')
+        source = (self.data_dir / path[5:]).resolve()
+        if not source.is_relative_to(self.media_dir.resolve()) or not source.is_file():
+            raise ValueError('媒体文件不存在或路径非法')
+        return source
+
+    def try_thumbnail(self, path: str, kind: str, thumb_b64: str | None = None) -> dict:
+        if kind not in ('image', 'video'):
+            return {'thumbPath': None}
+        try:
+            return {'thumbPath': self.ensure_thumbnail(path, kind, thumb_b64)}
+        except ValueError as error:
+            # Original upload must survive decoder failure; callers can retry with a client JPEG.
+            log.warning('缩略图待修复: %s', error)
+            return {'thumbPath': None, 'thumbnailError': str(error)}
+
+    def ensure_thumbnail(self, path: str, kind: str, thumb_b64: str | None = None,
+                         force: bool = False) -> str:
+        source = self._source(path)
+        if kind not in ('image', 'video'):
+            raise ValueError('仅图片和视频支持缩略图')
+        with self.thumbnails.LOCKS[hash(str(source)) % len(self.thumbnails.LOCKS)]:
+            if not force:
+                candidates = [*source.parent.glob(f'{source.stem}.thumb.*.jpg'),
+                              source.with_suffix('.thumb.jpg')]
+                for candidate in candidates:
+                    if candidate.is_file() and candidate.stat().st_size <= self.thumbnails.MAX_THUMB:
+                        if self.thumbnails.valid_thumbnail(candidate.read_bytes()):
+                            return 'data/' + candidate.relative_to(self.data_dir).as_posix()
+            data = None
+            if thumb_b64 and len(thumb_b64) <= self.thumbnails.MAX_THUMB * 4 // 3 + 4:
+                try:
+                    data = base64.b64decode(thumb_b64, validate=True)
+                except ValueError:
+                    pass
+            if not data or not self.thumbnails.valid_thumbnail(data):
+                data = self.thumbnails.generate_thumbnail(source, kind)
+            # Content-addressed cover URLs avoid serving an old broken cached cover after repair.
+            digest = hashlib.sha256(data).hexdigest()[:16]
+            return self._write(source.stem, f'thumb.{digest}.jpg', data)
 
     def _write(self, digest: str, ext: str, buf: bytes) -> str:
         sub = self.media_dir / digest[:2]
         sub.mkdir(parents=True, exist_ok=True)
         fp = sub / f'{digest}.{ext}'
-        if not fp.exists():
-            fp.write_bytes(buf)
+        if not fp.exists() or (ext.startswith('thumb.') and fp.read_bytes() != buf):
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=sub, prefix='.', delete=False) as stream:
+                    temporary = stream.name
+                    stream.write(buf)
+                os.replace(temporary, fp)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
         return f'data/media/{digest[:2]}/{digest}.{ext}'
 
     def abort(self, att_id: str):

@@ -40,12 +40,13 @@ export async function prewarmThumbs(limit = 60): Promise<void> {
   try {
     const atts = await db.allAtts()
     const todos = atts.filter(a =>
-      (a.kind === 'image' || a.kind === 'video') && (a.thumbPath || a.serverPath))
+      (a.kind === 'image' || a.kind === 'video') && a.thumbPath)
     let cursor = 0
     let done = 0
     const worker = async () => {
       while (done < limit && cursor < todos.length) {
         const a = todos[cursor++]
+        if (await db.getBlob(a.id + ':thumb')) continue
         await backfillAtt(a, 'thumb')
         done++
       }

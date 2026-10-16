@@ -8,6 +8,7 @@ import * as db from './db'
 import { blobToB64 } from './image'
 import { prewarmThumbs } from './media'
 import { refreshMedia } from './useMedia'
+import { ensureLocalThumbnail } from './thumbnails'
 import { mergeMediaPaths, recoverPending } from './syncRecovery'
 
 const CHUNK = 768 * 1024 // base64 前原始字节/块
@@ -41,12 +42,14 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
   if (att.serverPath) return true
   const blob = await db.getBlob(att.id)
   if (!blob || !att.sha256) return false
+  const thumb = att.kind === 'audio' ? null : await ensureLocalThumbnail(att)
+  const thumbB64 = thumb ? await blobToB64(thumb) : undefined
   const begin = await callJot('upload_begin', {
     attId: att.id, kind: att.kind, mime: normMime(att, blob),
-    size: blob.size, sha256: att.sha256,
+    size: blob.size, sha256: att.sha256, thumbB64,
   })
   if (begin?.exists) {
-    await db.putAtt({ ...att, serverPath: begin.path })
+    await db.putAtt({ ...att, serverPath: begin.path, thumbPath: begin.thumbPath ?? att.thumbPath })
     return true
   }
   const b64 = await blobToB64(blob)
@@ -55,9 +58,8 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
   for (let off = 0; off < b64.length; off += per) {
     await callJot('upload_chunk', { attId: att.id, seq: seq++, b64: b64.slice(off, off + per) })
   }
-  const thumb = att.kind === 'audio' ? null : await db.getBlob(att.id + ':thumb') // 图片/视频都带缩略图
   const r = await callJot('upload_end', {
-    attId: att.id, thumbB64: thumb ? await blobToB64(thumb) : undefined,
+    attId: att.id, thumbB64,
   })
   await db.putAtt({ ...att, serverPath: r.path, thumbPath: r.thumbPath ?? null })
   return true

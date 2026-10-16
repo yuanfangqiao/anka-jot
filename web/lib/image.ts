@@ -13,12 +13,12 @@ const Q_THUMB = 0.7
 async function toBitmap(src: Blob): Promise<ImageBitmap | HTMLImageElement> {
   try { return await createImageBitmap(src) } catch { /* Safari 老版本回退 */ }
   const url = URL.createObjectURL(src)
-  try {
-    return await new Promise((res, rej) => {
-      const img = new Image()
-      img.onload = () => res(img); img.onerror = rej; img.src = url
-    })
-  } finally { /* objectURL 在 canvas 绘制后即可释放，此处保留由调用方兜底 */ }
+  return new Promise((res, rej) => {
+    const img = new Image()
+    img.onload = () => res(img)
+    img.onerror = e => { URL.revokeObjectURL(url); rej(e) }
+    img.src = url
+  })
 }
 
 function drawScaled(bmp: ImageBitmap | HTMLImageElement, maxEdge: number, q: number): Promise<{ blob: Blob; w: number; h: number }> {
@@ -41,14 +41,27 @@ export async function sha256Hex(b: Blob): Promise<string> {
   return [...new Uint8Array(dig)].map(x => x.toString(16).padStart(2, '0')).join('')
 }
 
-/** 相机/相册入口统一走这里：产出 full+thumb 与元数据 */
+function releaseBitmap(bmp: ImageBitmap | HTMLImageElement) {
+  if ('close' in bmp) bmp.close()
+  else URL.revokeObjectURL(bmp.src)
+}
+
+/** 旧附件也可独立补小图，不再重复压缩/计算原图哈希。 */
+export async function createImageThumbnail(src: Blob): Promise<Blob> {
+  const bmp = await toBitmap(src)
+  try { return (await drawScaled(bmp, THUMB_EDGE, Q_THUMB)).blob }
+  finally { releaseBitmap(bmp) }
+}
+
+/** 相机/相册统一产出 full + 独立小图；小图失败交给后端补生成。 */
 export async function processImage(src: Blob): Promise<ImageOut> {
   const bmp = await toBitmap(src)
-  const full = await drawScaled(bmp, MAX_EDGE, Q_FULL)
-  // 缩略图只是优化：生成失败也必须保存并展示大图。
-  const thumb = await drawScaled(bmp, THUMB_EDGE, Q_THUMB).catch(() => null)
-  if ('close' in bmp) (bmp as ImageBitmap).close()
-  return { full: full.blob, thumb: thumb?.blob ?? null, width: full.w, height: full.h, mime: 'image/jpeg', sha256: await sha256Hex(full.blob) }
+  try {
+    const full = await drawScaled(bmp, MAX_EDGE, Q_FULL)
+    const thumb = await drawScaled(bmp, THUMB_EDGE, Q_THUMB).catch(() => null)
+    return { full: full.blob, thumb: thumb?.blob ?? null, width: full.w,
+      height: full.h, mime: 'image/jpeg', sha256: await sha256Hex(full.blob) }
+  } finally { releaseBitmap(bmp) }
 }
 
 /** Blob → base64（分块上传用） */

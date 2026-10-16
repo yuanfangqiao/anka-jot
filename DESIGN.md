@@ -212,11 +212,14 @@ plugins/jot/
 - 实际同步为 `/call` outbox 单队列，媒体上传在 note.upsert 之前；取消并行写穿透。写入过程中发生的新编辑保留 local 状态。
 - 失败项仅增加计数并跳过，保留队列等待恢复；冲突版本留档，本地编辑保留并依据返回 rev 后续重试。
 - 冷启动/回前台/pageshow/online/下拉刷新做全量 metadata 对账；同 rev 或 local 笔记仅补相同附件（sha 不冲突）的缺失路径，不覆盖本地正文、不恢复本地已删附件。普通 60 秒心跳增量拉取。
-- 图片顺序：本地大图 → 服务端大图 → 本地小图 → 服务端小图；离线优先所有本地资源。缩略图生成失败可保存大图。这里大图指现有采集管线产出的 full（≤2048px），不改变采集压缩规格。
-- 视频封面顺序：本地海报 → 远端海报 → 本地/远端原片首帧；播放始终使用原片。
+- 图片/视频列表顺序：本地小图 → 远端小图 → 从本地 full 补生成 → 服务端补生成；不自动下载远端 full。点击图片后才加载 full（现有 ≤2048px 规格），视频点击后才加载原片。生成失败也保存原文件。
+- 封面统一最长边 480px 的 JPEG，浏览器视频抽帧使用一个 video 完成 metadata/seek/canvas，超时/结束释放解码器。`MediaPreview` 经 IntersectionObserver 接近视口时加载，避免旧媒体补图排队阻塞首屏。
 - `useMedia.ts` 为组件生成独立 object URL，替换 DOM 后释放；取消/卸载丢弃迟到结果。缓存层 URL 不允许由展示层撤销；LRU 淘汰不破坏正在显示的媒体。
 - `MediaPreview.vue` 统一卡片与详情图格；加载失败逐源回退；恢复事件重试，不永久缓存 broken 状态。
 - 首页 `usePullRefresh.ts` 只接管顶部单指纵向下拉；64px 显示距离松开刷新，横向/多指/取消不触发，重复刷新合并。
+- 服务端 `thumbnails.py` 使用 FFmpeg 补生成图片/视频封面，单次 15 秒、同时最多 2 个解码进程，短视频从首帧重试。前端小图可直接保存，无 FFmpeg 时缺小图明确报错，原文件上传仍成功。
+- 封面文件采用内容哈希路径并原子落盘；修复时仅更新附件路径/推进 note rev，幂等调用不变更 rev。旧客户端未提供 thumbPath 的 upsert 会复用/生成已上传文件的小图。
+- 前端 `thumbnails.ts` 合并同附件生成/修复任务、并发最多 2，生成的旧本地小图可单独补传；不重传/下载原文件。预热和 load 回填只拉取小图。
 - `api.callApp(id, method, args, { signal })` 的可选参数用于同步 60 秒超时；媒体回填去重并覆盖响应体超时。旧宿主需同时更新才能支持中止。
 
 ## 7. 前端工程方案
@@ -324,9 +327,10 @@ server/
 | `upsert_note` | `{note}` | `{ok,serverRev}` | 含附件元数据数组；LWW 合并 |
 | `delete_note` | `{id}` | `{ok}` | tombstone |
 | `list_tags` | `{}` | `{tags:[{name,color,pinned,count}]}` | |
-| `upload_begin` | `{attId,noteId,kind,size,sha256}` | `{ok,exists?}` | sha256 已存在则秒传 |
+| `upload_begin` | `{attId,kind,mime,size,sha256,thumbB64?}` | `{ok,exists?,path?,thumbPath?,thumbnailError?}` | 秒传也返回/修复小图路径 |
 | `upload_chunk` | `{attId,seq,b64}` | `{ok,received}` | 单块 ≤1MB(base64 后 ~1.37MB，HTTP JSON 无 256KB 限制) |
-| `upload_end` | `{attId,thumbB64?}` | `{ok,path,thumbPath}` | 拼合→校验 sha256→落盘→回写 attachments.serverPath |
+| `upload_end` | `{attId,thumbB64?}` | `{ok,path,thumbPath,thumbnailError?}` | 校验并落盘；接收前端小图或 FFmpeg 补生成；失败保留原文件 |
+| `ensure_thumbnail` | `{attId,thumbB64?,force?}` | `{ok,path,thumbPath}` | 小图单独补传/历史补生成，force 修复损坏封面；不重复上传原文件 |
 | `ocr_image` | `{attId}` | `{ok,text}` | 服务端读文件→data URL→`ctx.llm.stream` 视觉模型 |
 | `transcribe` | `{attId,lang?}` | `{ok,segments?}` 或 `{ok:false,reason:'no_adapter'}` | 预留：未来注册 whisper 适配器即开通 |
 | `summarize` | `{scope:{noteId?/from,to?/tag?}}` | `{ok,markdown}` | 组装笔记文本+OCR+转写 → `ctx.llm` |

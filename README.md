@@ -32,7 +32,9 @@ UI 读写 ──► IndexedDB（唯一事实源）
   结果 toast 反馈，失败原因直接显示在 banner 里）。
 - **恢复修复**：冷启动、pageshow、回前台、联网及手动下拉时全量核对附件路径；相同 rev 也补路径，保护本地正文与附件增删。普通心跳仍按增量同步。
 - **请求可恢复**：同步调用与媒体缓存下载 60 秒超时；需要宿主支持 callApp 第四参数 AbortSignal。
-- **预览独立**：`useMedia` + `MediaPreview` 原图优先、失败回退，各组件持有并释放自己的 object URL；没有视频海报时加载原片，回前台重新创建媒体元素。缩略图生成失败不影响保存。
+- **小图优先**：列表、图格和视频封面只加载最长边 480px 的 JPEG；原图/原片只在点击查看时加载。`MediaPreview` 在接近视口时加载，`useMedia` 独立持有 URL；回前台可重试。
+- **前后端补图**：采集时生成图片/视频小图；旧本地附件可独立补生成。上传和秒传均返回 thumbPath；没有小图的远端附件通过 `ensure_thumbnail` 由 FFmpeg 补生成，前端已有小图也可单独补传。
+- **小图缓存**：封面加载后仅回填小图，预热只下载小图；禁止因为显示卡片后台下载原图/整段视频。
 - **下拉刷新**：首页列表顶部单指向下拉，松开后刷新本地卡片、同步和重试媒体；离线保留本地内容。
 
 ### 2. iOS 录音无声修复 — MicSession（`web/lib/audio.ts`）
@@ -119,7 +121,7 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` | 首页通栏方块工具条（圆角方块瓷贴，与宿主胶囊 dock 区分） |
 | `jot-date-sep` | 时间线日期分隔（双侧渐变细线 + 加粗标签） |
 | `jot-cover-missing` | 封面图加载失败渐变占位 |
-| `jot-media-preview` | 图片/视频封面填满卡片，大图优先，失败逐级回退 |
+| `jot-media-preview` | 图片/视频 JPEG 缩略图填满卡片，接近视口时加载，缺失自动补图 |
 | `jot-refresh-list` / `jot-refresh-status` | 列表内下拉刷新与状态提示，隔离浏览器页面刷新 |
 | `jot-overlay-blur` / `jot-safe-bottom` / `jot-sheet-maxh` | Sheet 弹层 |
 | `jot-rail` / `jot-dot` | 日历时间轴定位 |
@@ -132,3 +134,26 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 - ❌ 不要在模板里写 `h-[72px]`、`md:max-w-3xl`、`columns-2`、`line-clamp-2` 这类新任意值/变体。
 - ❌ 不要硬编码颜色；用 `var(--*)`，深色模式才不破。
 - ❌ 不要在录音流程里重新 `getUserMedia`（走 `acquireMicStream`）。
+
+## 缩略图生成与验证
+
+浏览器采集时生成最长边 480px、JPEG 质量 0.7 的小图。服务器补生成图片/视频封面需要
+系统 `ffmpeg`（不新增 Python/npm 包）：macOS `brew install ffmpeg`；Debian/Ubuntu
+`sudo apt-get install ffmpeg`。用 `ffmpeg -version` 检查后重启后端。
+客户端上传的小图可在无 FFmpeg 时保存；旧文件和浏览器不能解码的视频需要服务器生成。
+FFmpeg 无法解码时保留原文件、返回明确错误，卡片可点击查看原文件。
+
+- `upload_begin` 支持可选 `thumbB64`，秒传结果包含 `path / thumbPath`。
+- `upload_end` 保存原文件及前端小图；小图缺失/不合格则补生成，生成失败不撤销原文件上传。
+- `ensure_thumbnail({attId, thumbB64?, force?})` 修复旧封面，返回 `{ok,path,thumbPath}`；元数据变化更新 note rev，重复调用不重复推进 rev。
+- JPEG 最长边 480px、最大 512KB；新生成封面以内容哈希命名，避免命中旧损坏缓存。
+
+从宿主根目录执行隔离回归（合成数据，不读写插件 data/）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s plugins/anka-jot/tests -p 'test_thumbnails.py' -v
+ANKA_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs ANKA_THUMB_SCREENSHOTS=/tmp/jot-thumbnails node plugins/anka-jot/tests/check-thumbnails.mjs
+```
+
+浏览器回归需要 Chrome 和 Playwright，检查前端图片/视频小图、历史补图、秒传地址保留、
+列表零原文件请求、点击加载大图、恢复重试，并输出 390×844 / 1440×900 截图。

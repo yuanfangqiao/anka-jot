@@ -193,6 +193,9 @@ class Store:
 
     def set_att_media(self, att_id: str, path: str, thumb_path: str | None):
         with closing(self._c()) as c, c:
+            row = c.execute('SELECT serverPath,thumbPath FROM atts WHERE id=?', (att_id,)).fetchone()
+            if not row or tuple(row) == (path, thumb_path):
+                return
             c.execute('UPDATE atts SET serverPath=?, thumbPath=? WHERE id=?',
                       (path, thumb_path, att_id))
             self._bump_note_rev(c, att_id)

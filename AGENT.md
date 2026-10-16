@@ -30,9 +30,10 @@
 9. **不改宿主内核**：确需宿主配合的改动（如 share_target、SW 注入）按 DESIGN §0 白名单流程提评审，不顺手改。
 10. **系统返回经宿主分发**：`lib/nav.ts` 维护 Jot 内部栈，通过 `uiCtx.navigation.register` 注册返回；hash 经 `setHash('anka-jot', ...)` 镜像，禁止监听顶层 `popstate` 或覆盖路由器 history.state。切应用保留本插件栈，teardown 注销。完整协议见宿主 `docs/NAVIGATION.md`。
 
-11. **媒体可用性优先**：有本地/服务端大图即直接显示，缩略图不可成为保存或预览前置条件；用 `useMedia` 独立持有 object URL，不得撤销 db 缓存所有的 URL。图片失败必须有回退与恢复重试，禁止永久锁死 broken 状态。
+11. **列表只加载缩略图**：图片与视频卡片使用最长边 480px 的 JPEG；缺图时从本地 full 补生成或调用 `ensure_thumbnail`，禁止列表自动下载远端原图/原片，点击查看才加载原文件。采集生成失败不得丢原文件；上传/秒传均须返回 thumbPath。`useMedia` 独立持有 URL，失败可重试，禁止永久 broken 状态。
 12. **PWA 恢复必须重试媒体**：visibilitychange 可见、pageshow、online、冷启动和下拉刷新触发附件对账；相同 note rev 也补缺失路径。本地待传编辑不得被远端覆盖。
-13. **只有一条同步写路径**：先 IDB + outbox，后媒体上传，再 upsert_note；禁止绕开 outbox 写穿透或失败五次后删除队列。同步请求应可超时，UI 不等待上传完成。
+13. **服务端缩略图依赖 FFmpeg**：前端无法解码或旧数据缺封面时由服务端补生成；不可用须明确报错并保留原文件。回归必须检查列表没有原文件请求，并覆盖图片、视频、秒传与历史补图。
+14. **只有一条同步写路径**：先 IDB + outbox，后媒体上传，再 upsert_note；禁止绕开 outbox 写穿透或失败五次后删除队列。同步请求应可超时，UI 不等待上传完成。
 
 ## 3. 标准工作流
 

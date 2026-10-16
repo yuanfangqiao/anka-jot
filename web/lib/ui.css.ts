@@ -12,6 +12,7 @@ import { CSS_CARDS } from './ui.css.cards'
 
 const CSS = `
 .jot-media-preview { width: 100%; height: 100%; overflow: hidden; }
+.jot-media-preview > .jot-cover-missing { height: 100%; padding: 12px; text-align: center; }
 .jot-media-preview > img, .jot-media-preview > video { width: 100%; height: 100%; object-fit: cover; }
 .jot-refresh-list { overscroll-behavior-y: contain; }
 .jot-refresh-status { flex-shrink: 0; overflow: hidden; text-align: center; color: var(--text-2); font-size: 12px; }

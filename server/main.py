@@ -34,6 +34,7 @@ def _load(mod_name: str, filename: str):
 
 
 store_mod = _load('store', 'store.py')
+thumb_mod = _load('thumbnails', 'thumbnails.py')
 media_mod = _load('media', 'media.py')
 ai_mod = _load('ai', 'ai.py')
 
@@ -66,7 +67,7 @@ class Jot(Service):
     def __init__(self, ctx):
         super().__init__(ctx, 'anka-jot')
         self.store = store_mod.Store(DATA_DIR)
-        self.media = media_mod.MediaStore(DATA_DIR)
+        self.media = media_mod.MediaStore(DATA_DIR, thumb_mod)
         log.info('jot service ready, data=%s', DATA_DIR)
 
     # ─── 快照（/state 也用它） ──────────────────────
@@ -82,6 +83,10 @@ class Jot(Service):
                 log.warning('atts 超限截断: %d > %d (noteId=%s)',
                             len(atts), MAX_ATTS_PER_NOTE, note.get('id'))
                 atts = atts[:MAX_ATTS_PER_NOTE]
+        if atts:
+            atts = [{**a, **self.media.try_thumbnail(a['serverPath'], a['kind'])}
+                    if a.get('serverPath') and a.get('kind') in ('image', 'video') and not a.get('thumbPath')
+                    else a for a in atts]
         final, applied = self.store.upsert_note(note, atts)
         log.info('upsert_note 落库: id=%s rev=%s applied=%s',
                  final['id'], final['rev'], applied)
@@ -104,10 +109,11 @@ class Jot(Service):
 
     # ─── 媒体上传（分块 base64） ─────────────────────
     def upload_begin(self, attId: str, kind: str, mime: str, size: int,
-                     sha256: str):
+                     sha256: str, thumbB64: str | None = None):
         existed = self.store.has_media(sha256)
-        if existed:
-            return {'ok': True, 'exists': True, 'path': existed['path']}
+        if existed and self.media.has_file(existed['path']):
+            thumb = self.media.try_thumbnail(existed['path'], existed['kind'], thumbB64)
+            return {'ok': True, 'exists': True, 'path': existed['path'], **thumb}
         return self.media.begin(str(attId), str(kind), str(mime),
                                 int(size), str(sha256))
 
@@ -119,6 +125,21 @@ class Jot(Service):
         self.store.put_media(r['sha256'], r['path'], r['size'], r['kind'])
         self.store.set_att_media(str(attId), r['path'], r['thumbPath'])
         return r
+
+    def ensure_thumbnail(self, attId: str, thumbB64: str | None = None, force: bool = False):
+        """Repair legacy/missing covers without uploading or downloading the original again."""
+        att = self.store.att_row(str(attId))
+        if not att or att['kind'] not in ('image', 'video'):
+            raise ValueError('图片或视频附件不存在')
+        path = att.get('serverPath')
+        if not path and att.get('sha256'):
+            media = self.store.has_media(att['sha256'])
+            path = media['path'] if media else None
+        if not path:
+            raise ValueError('原文件尚未上传，请稍后重试')
+        thumb = self.media.ensure_thumbnail(path, att['kind'], thumbB64, bool(force))
+        self.store.set_att_media(att['id'], path, thumb)
+        return {'ok': True, 'path': path, 'thumbPath': thumb}
 
     # ─── AI 能力 ────────────────────────────────────
     def ocr_image(self, attId: str):

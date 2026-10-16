@@ -3,10 +3,11 @@ import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { mediaUrl, type JotAtt } from '../host'
 import * as db from './db'
 import { backfillAtt } from './media'
+import { ensureLocalThumbnail, publishThumbnail, repairThumbnail } from './thumbnails'
 
 export const mediaRevision = ref(0)
 export function refreshMedia() { mediaRevision.value++ }
-type Source = { url: string; video: boolean }
+type Source = { url: string; video: boolean; kind: 'full' | 'thumb' }
 
 export function useMedia(att: () => JotAtt | null | undefined, full = false) {
   const src = ref<string | null>(null)
@@ -16,6 +17,7 @@ export function useMedia(att: () => JotAtt | null | undefined, full = false) {
   let owned: string[] = []
   let choices: (() => Promise<Source | null>)[] = []
   let cursor = 0
+  let selectedKind: 'full' | 'thumb' = 'thumb'
   const release = (urls: string[]) => urls.forEach(url => URL.revokeObjectURL(url))
 
   async function select(token: number) {
@@ -29,6 +31,7 @@ export function useMedia(att: () => JotAtt | null | undefined, full = false) {
         return
       }
       if (candidate.url.startsWith('blob:')) owned.push(candidate.url)
+      selectedKind = candidate.kind
       video.value = candidate.video
       src.value = candidate.url + (candidate.video && !full ? '#t=0.001' : '')
       break
@@ -51,28 +54,32 @@ export function useMedia(att: () => JotAtt | null | undefined, full = false) {
     if (!a) return
     a = (await db.attsOf(a.noteId).catch(() => [])).find(item => item.id === a!.id) ?? a
     if (token !== generation) return
-    function local(key: string, isVideo = false) {
+    function local(key: string, isVideo = false, kind: 'full' | 'thumb' = full ? 'full' : 'thumb') {
       choices.push(async () => {
         const blob = await db.getBlob(key)
-        return blob ? { url: URL.createObjectURL(blob), video: isVideo } : null
+        return blob ? { url: URL.createObjectURL(blob), video: isVideo, kind } : null
       })
     }
-    function remote(path: string | null | undefined, isVideo = false) {
+    function remote(path: string | null | undefined, isVideo = false, kind: 'full' | 'thumb' = full ? 'full' : 'thumb') {
       const url = mediaUrl(path)
       if (url) choices.push(async () => ({
-        url: mediaRevision.value ? `${url}?jotRetry=${mediaRevision.value}` : url, video: isVideo,
+        url: mediaRevision.value ? `${url}?jotRetry=${mediaRevision.value}` : url, video: isVideo, kind,
       }))
     }
-    // 按需读取下一来源：有海报时不预先物化整段视频，有原图时不等待缩略图。
-    if (a.kind === 'video' && !full) {
+    if (!full) {
       local(a.id + ':thumb')
       remote(a.thumbPath)
-      local(a.id, true)
-      remote(a.serverPath, true)
+      const attachment = a
+      choices.push(async () => {
+        const repaired = await repairThumbnail(attachment, true)
+        if (repaired.blob) return { url: URL.createObjectURL(repaired.blob), video: false, kind: 'thumb' }
+        const url = mediaUrl(repaired.path)
+        return url ? { url, video: false, kind: 'thumb' } : null
+      })
     } else {
       local(a.id, a.kind === 'video')
       if (navigator.onLine) remote(a.serverPath, a.kind === 'video')
-      if (a.kind === 'image') { local(a.id + ':thumb'); remote(a.thumbPath) }
+      if (a.kind === 'image') { local(a.id + ':thumb', false, 'thumb'); remote(a.thumbPath, false, 'thumb') }
       if (!navigator.onLine) remote(a.serverPath, a.kind === 'video')
     }
     await select(token)
@@ -80,11 +87,16 @@ export function useMedia(att: () => JotAtt | null | undefined, full = false) {
   onUnmounted(() => { generation++; release(owned) })
   function loaded() {
     const a = att()
-    if (a && src.value && !src.value.startsWith('blob:')) {
-      // 显示成功后再回填缓存，不阻塞出图。
-      void db.attsOf(a.noteId).then(atts => {
+    if (!a || !src.value) return
+    if (!src.value.startsWith('blob:')) {
+      void db.attsOf(a.noteId).then(atts => backfillAtt(
+        atts.find(item => item.id === a.id) ?? a, selectedKind)).catch(() => {})
+    } else if (!full && a.serverPath && !a.thumbPath) {
+      void db.attsOf(a.noteId).then(async atts => {
         const latest = atts.find(item => item.id === a.id) ?? a
-        return backfillAtt(latest, latest.kind === 'image' ? 'full' : 'thumb')
+        if (latest.thumbPath) return
+        const blob = await ensureLocalThumbnail(latest)
+        if (blob) await publishThumbnail(latest, blob)
       }).catch(() => {})
     }
   }
