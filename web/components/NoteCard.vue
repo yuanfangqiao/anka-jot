@@ -5,7 +5,7 @@
  *  复合卡 = 3:4 上封面（图或视频海报）下文（封面点预览/播放、文区进详情）。 */
 import { computed, onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
-import { coverOf } from '../state/store'
+import { coverCache, coverOf } from '../state/store'
 import * as db from '../lib/db'
 import { backfillAtt } from '../lib/media'
 import { dayLabel, fmtClock, fmtBytes, fmtDur } from '../lib/format'
@@ -65,12 +65,13 @@ const body = computed(() =>
 /** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
 const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
 
-/** 封面（图片卡/视频卡/复合卡需要；视频卡封面 = 海报帧） */
-const cover = ref<string | null>(null)
+/** 封面（图片卡/视频卡/复合卡需要；视频卡封面 = 海报帧）。
+ *  响应式读取 covers 缓存：快照到达/拍摄后的重算结果立即反映到卡片，
+ *  不再依赖组件重新 mount（:key 复用的旧卡片也能刷新） */
+const cover = computed(() => coverCache(props.note.id))
 const coverBroken = ref(false)
-onMounted(async () => {
-  if (cardType.value !== 'voice' && cardType.value !== 'text')
-    cover.value = await coverOf(props.note.id)
+onMounted(() => {
+  if (cardType.value !== 'voice' && cardType.value !== 'text') void coverOf(props.note.id)
 })
 
 /** 点击图片区 → 全屏预览（全图 blob 优先，服务端路径兜底） */

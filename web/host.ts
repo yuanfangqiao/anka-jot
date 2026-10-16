@@ -11,6 +11,11 @@ export interface UiLike {
     Promise<{ ok: boolean; result: any }> }
   toast: { ok: (m: string) => void; err?: (m: string) => void; info?: (m: string) => void }
   layout: { isMobile: { value: boolean }; isWide: { value: boolean } }
+  navigation?: {
+    register: (handler: { appId: string; canGoBack: () => boolean;
+      back: () => void | Promise<void>; priority?: number }) => () => void
+    setHash: (appId: string, hash: string) => Promise<void>
+  }
   registerApp: (meta: any) => void
   unregisterApp: (id: string) => void
 }

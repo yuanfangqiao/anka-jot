@@ -1,7 +1,6 @@
-/** nav.ts — 插件内栈式导航。registerApp 只给一条 /jot 路由，
- *  内部视图自管；栈序列化进 location.hash（#/note/<id>），刷新可恢复、
- *  系统返回键经 popstate 回退。 */
+/** 插件内部栈由 Jot 保存；系统返回统一由 Anka 分发，URL 只镜像当前视图。 */
 import { reactive } from 'vue'
+import type { UiLike } from '../host'
 
 export interface NavItem { view: string; params: Record<string, string> }
 
@@ -28,11 +27,15 @@ function fromHash(h: string): NavItem | null {
   return { view: m[1], params }
 }
 
-let silent = false
+let hostNavigation: UiLike['navigation']
 function writeUrl() {
-  silent = true
-  history.replaceState(null, '', location.pathname + location.search + toHash(nav.current))
-  queueMicrotask(() => { silent = false })
+  if (hostNavigation) {
+    void hostNavigation.setHash('anka-jot', toHash(nav.current))
+      .catch(e => console.error('[jot] navigation', e))
+  } else if (location.pathname === '/anka-jot') {
+    // 旧宿主兼容：保留 Vue Router 的 history.state，且不改其他应用 URL。
+    history.replaceState(history.state, '', location.pathname + location.search + toHash(nav.current))
+  }
 }
 
 export function push(view: string, params: Record<string, string> = {}) {
@@ -51,18 +54,18 @@ export function pop(fallback = 'home') {
 }
 export function isTab(view: string) { return TAB_ROOTS.has(view) }
 
-export function initNav() {
-  const it = fromHash(location.hash)
-  if (it) nav.stack.splice(0, nav.stack.length, it)
-  window.addEventListener('popstate', () => {
-    if (silent) return
-    const cur = fromHash(location.hash)
-    if (!cur) { pop(); return }
-    // 与当前栈顶不同步时以 URL 为准（浏览器前进/后退）
-    const top = nav.current
-    if (cur.view !== top.view || JSON.stringify(cur.params) !== JSON.stringify(top.params)) {
-      if (nav.stack.length > 1) nav.stack.pop()
-      else nav.stack[0] = cur
-    }
+export function initNav(navigation?: UiLike['navigation']) {
+  hostNavigation = navigation
+  // 只解析自己的深链；其他插件的 hash 不属于 Jot。
+  const it = location.pathname === '/anka-jot' ? fromHash(location.hash) : null
+  if (it) {
+    const stack = isTab(it.view) ? [it] : [{ view: 'home', params: {} }, it]
+    nav.stack.splice(0, nav.stack.length, ...stack)
+  }
+  const unregister = navigation?.register({
+    appId: 'anka-jot',
+    canGoBack: () => nav.depth > 1,
+    back: () => pop(),
   })
+  return () => { unregister?.(); hostNavigation = undefined }
 }

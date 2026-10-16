@@ -76,7 +76,7 @@
 
 ## 3. 信息架构与页面设计（对照设计稿六屏）
 
-宿主约束：`registerApp` 只注册一条路由 `/jot` 与一个根组件。因此 **Jot 内部导航用自研轻量栈式导航**（`useNav`：push/replace/pop），并把当前栈序列化到 URL query（`?s=note/<id>`）保证刷新可恢复、系统返回键可用（监听 `popstate`）。
+宿主约束：`registerApp` 注册 `/anka-jot` 与一个根组件。**Jot 内部导航使用轻量栈**（`lib/nav.ts`：push/replace/pop），当前视图经宿主 `uiCtx.navigation.setHash` 镜像为 `#/note?id=...`。系统返回由宿主统一分发给注册的 `canGoBack/back`；不独立监听顶层 `popstate`。刷新非根视图时补首页父级，切应用保留内存栈，teardown 注销。旧宿主仅降级保留按钮返回与 hash 镜像。
 
 ### 3.1 页面清单
 
@@ -232,7 +232,7 @@ web/
 ├── index.ts                  ~40   setup(uiCtx)：registerApp + 卸载清理
 ├── App.vue                   ~120  根布局：Tab 栏/双栏分流 + useNav 出口 + OfflineBanner
 ├── lib/
-│   ├── nav.ts                ~80   栈式导航 + popstate/query 同步
+│   ├── nav.ts                ~80   内部栈 + 宿主返回注册/hash 镜像
 │   ├── db.ts                 ~250  IDB 封装 + 5 张表 CRUD + 事务助手
 │   ├── outbox.ts             ~120  队列追加/消费/退避
 │   ├── sync.ts               ~250  对账流程（§6.2）+ ctx.sync 客户端封装

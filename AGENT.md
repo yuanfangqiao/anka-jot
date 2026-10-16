@@ -2,7 +2,7 @@
 
 > 本目录是 anka 的应用插件。在此工作前：先读本文件 → `README.md`（工程规则）→ `DESIGN.md`（设计契约）。
 > 宿主通用红线（≤300 行、单一根元素、禁 `mode="out-in"`、副作用可逆）以仓库根 `AGENT.md` 为准，本文件只补插件私有规则。
-> 最后更新：2026-10-15
+> 最后更新：2026-10-16
 
 ## 1. 文档地图
 
@@ -28,6 +28,7 @@
 7. **后端无私有路由**：能力一律 `POST /api/apps/jot/call {method,args}`；LLM 只经 `ctx.llm`，禁直调 provider SDK。
 8. **`data/` 是运行时数据**：不提交、不手改、不往代码里写死其内容（已 gitignore）。
 9. **不改宿主内核**：确需宿主配合的改动（如 share_target、SW 注入）按 DESIGN §0 白名单流程提评审，不顺手改。
+10. **系统返回经宿主分发**：`lib/nav.ts` 维护 Jot 内部栈，通过 `uiCtx.navigation.register` 注册返回；hash 经 `setHash('anka-jot', ...)` 镜像，禁止监听顶层 `popstate` 或覆盖路由器 history.state。切应用保留本插件栈，teardown 注销。完整协议见宿主 `docs/NAVIGATION.md`。
 
 ## 3. 标准工作流
 

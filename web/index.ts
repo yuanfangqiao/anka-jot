@@ -10,7 +10,6 @@ import App from './App.vue'
 export async function setup(uiCtx: UiLike) {
   setUi(uiCtx)
   injectUiCss() // 插件自带语义样式（不依赖宿主 Tailwind 构建是否包含新类）
-  initNav()
   uiCtx.registerApp({
     id: 'anka-jot',
     title: '即刻',
@@ -20,10 +19,12 @@ export async function setup(uiCtx: UiLike) {
     order: 10,
     sidebar: true,
   })
+  const stopNav = initNav(uiCtx.navigation)
   await initStore()
   startSyncLoop()
   return {
     teardown() {
+      stopNav()
       stopSyncLoop()
       releaseMic() // 释放会话级麦克风流与共享 AudioContext
       removeUiCss()

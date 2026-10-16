@@ -45,6 +45,14 @@ export async function reload() {
   notes.value = ns
   tags.value = await db.listTags()
   for (const n of ns) index.upsert(n, n.atts ?? [])
+  // 快照合并后立即重算封面：离线启动时算不出的（无 serverPath）此刻元数据已到，
+  // 卡片是响应式读取（coverCache），重算结果直接反映到列表——「拉到即显示」
+  for (const n of ns) {
+    if ((n.atts ?? []).some(a => a.kind === 'image' || a.kind === 'video')) {
+      invalidateCover(n.id)
+      void coverOf(n.id)
+    }
+  }
   await refreshPending()
 }
 
@@ -254,8 +262,16 @@ export async function coverOf(noteId: string): Promise<string | null> {
   }
   // 走了服务端兜底：后台拉回缩略图进本地缓存（下次离线也能看）
   if (url && att && !url.startsWith('blob:')) void backfillAtt(att, 'thumb')
-  covers.set(noteId, url)
+  // null 不缓存：离线启动算不出封面（无 serverPath）时留待快照到达后重算；
+  // 缓存 null 会让封面永久空白（invalidateCover 只有删除/拍照才触发）
+  if (url) covers.set(noteId, url)
+  else covers.delete(noteId)
   return url
+}
+
+/** 响应式读取封面缓存：卡片 computed 用，重算/失效自动刷新 UI */
+export function coverCache(noteId: string): string | null {
+  return covers.get(noteId) ?? null
 }
 export function invalidateCover(noteId: string) {
   const url = covers.get(noteId)

@@ -81,6 +81,10 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 
 ### 7. PWA 安装（获得完整体验）
 
+内部页面返回通过宿主 `uiCtx.navigation.register` 接入；当前视图经 `setHash` 镜像，
+切应用不清内部栈，根页系统返回保持本应用。禁止插件独立监听顶层 popstate。
+完整接口见宿主 `docs/NAVIGATION.md`；旧宿主只兼容页面按钮返回。
+
 - **iOS**：Safari 打开 → 分享 →「添加到主屏幕」。必须从主屏图标进入，
   才有独立全屏、后台音频会话与正确 safe-area。
 - **Android / 桌面 Chrome**：地址栏安装图标。

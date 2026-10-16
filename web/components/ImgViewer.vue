@@ -3,10 +3,12 @@
  *  从 ImgGrid 抽取，供 NoteCard 图片区点击直接预览复用。 */
 import { onUnmounted, watch } from 'vue'
 import { useUi } from '../host'
+import { useBack } from '../lib/useBack'
 
 const props = defineProps<{ src: string | null }>()
 const emit = defineEmits<{ close: [] }>()
 const icons = useUi().icons
+useBack(() => Boolean(props.src), () => emit('close'))
 
 function onKey(e: KeyboardEvent) { if (e.key === 'Escape') emit('close') }
 watch(() => props.src, (v) => {

@@ -6,6 +6,7 @@ import { reactive } from 'vue'
 import { callJot, type JotAtt, type JotNote } from '../host'
 import * as db from './db'
 import { blobToB64 } from './image'
+import { prewarmThumbs } from './media'
 
 const CHUNK = 768 * 1024 // base64 前原始字节/块
 
@@ -192,6 +193,7 @@ export async function syncNow(): Promise<void> {
   if (!syncState.online) { await refreshPending(); return }
   await pushOutbox()
   try { await pullMerge() } catch { /* 拉取失败不阻塞本地使用 */ }
+  void prewarmThumbs() // 立即拉回缺失的封面缩略图：打开即可预览，离线前提前缓存
 }
 
 // ─── 生命周期 ──────────────────────────────────────

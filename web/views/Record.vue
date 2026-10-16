@@ -10,6 +10,7 @@ import { pop } from '../lib/nav'
 import { fmtDur } from '../lib/format'
 import { attachAudio, newNote, saveDebounced } from '../state/store'
 import Waveform from '../components/Waveform.vue'
+import { useBack } from '../lib/useBack'
 
 const props = defineProps<{ noteId?: string }>()
 const emit = defineEmits<{ done: [noteId: string] }>()
@@ -19,6 +20,8 @@ const recording = ref(false)
 const seconds = ref(0)
 const peaks = ref<number[]>([])
 const error = ref('')
+// 系统返回录音页时先走正常停止/保存，避免仅卸载组件而丢掉录音结果。
+useBack(() => recording.value, stop, 10)
 
 let rec: JotRecorder | null = null
 let timer = 0

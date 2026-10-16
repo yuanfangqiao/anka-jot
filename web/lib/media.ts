@@ -18,3 +18,27 @@ export async function backfillAtt(att: JotAtt, kind: 'full' | 'thumb' = 'full') 
     await db.putBlob(key, await r.blob())
   } catch { /* 网络失败静默 */ }
 }
+
+/** 缩略图预热：在线时把本地缺失的封面缩略图立即从服务端拉回——「打开即可预览」，
+ *  且离线前已提前缓存好。并发 4 防手机端拥塞；幂等可重入（已有缓存自动跳过），
+ *  由 syncNow（60s 心跳/回网/回前台）反复触发直至补齐 */
+let prewarming = false
+export async function prewarmThumbs(limit = 60): Promise<void> {
+  if (!syncState.online || prewarming) return
+  prewarming = true
+  try {
+    const atts = await db.allAtts()
+    const todos = atts.filter(a =>
+      (a.kind === 'image' || a.kind === 'video') && (a.thumbPath || a.serverPath))
+    let cursor = 0
+    let done = 0
+    const worker = async () => {
+      while (done < limit && cursor < todos.length) {
+        const a = todos[cursor++]
+        await backfillAtt(a, 'thumb')
+        done++
+      }
+    }
+    await Promise.all(Array.from({ length: 4 }, worker))
+  } catch { /* 静默：下轮 sync 自动再试 */ } finally { prewarming = false }
+}

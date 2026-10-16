@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /** Sheet — 「＋」四入口动作面板：文本 / 拍照 / 相册 / 语音。 */
 import { useUi } from '../host'
+import { useBack } from '../lib/useBack'
 
 const emit = defineEmits<{ pick: [kind: 'text' | 'camera' | 'album' | 'voice']; close: [] }>()
 const icons = useUi().icons
+useBack(() => true, () => emit('close'))
 
 const ITEMS = [
   { kind: 'text', label: '文本', desc: '打开即记', icon: 'Type', hue: '#5E9B74' },

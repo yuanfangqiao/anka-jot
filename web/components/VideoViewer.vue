@@ -3,10 +3,12 @@
  *  与 ImgViewer 同交互；视频区点击不冒泡（避免误关），交给原生 controls。 */
 import { onUnmounted, watch } from 'vue'
 import { useUi } from '../host'
+import { useBack } from '../lib/useBack'
 
 const props = defineProps<{ src: string | null }>()
 const emit = defineEmits<{ close: [] }>()
 const icons = useUi().icons
+useBack(() => Boolean(props.src), () => emit('close'))
 
 function onKey(e: KeyboardEvent) { if (e.key === 'Escape') emit('close') }
 watch(() => props.src, (v) => {
