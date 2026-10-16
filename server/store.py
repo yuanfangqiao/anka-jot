@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updatedAt DESC);
 CREATE TABLE IF NOT EXISTS atts(
   id TEXT PRIMARY KEY, noteId TEXT, kind TEXT, serverPath TEXT, thumbPath TEXT,
   width REAL, height REAL, duration REAL, peaks TEXT, ocrText TEXT,
-  transcript TEXT, sha256 TEXT, createdAt REAL);
+  transcript TEXT, sha256 TEXT, size INTEGER, createdAt REAL);
 CREATE INDEX IF NOT EXISTS idx_atts_note ON atts(noteId);
 CREATE TABLE IF NOT EXISTS tags(
   name TEXT PRIMARY KEY, color TEXT, pinned INTEGER DEFAULT 0, lastUsedAt REAL);
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 NOTE_COLS = ('id', 'title', 'text', 'tags', 'source', 'createdAt', 'updatedAt',
              'pinned', 'color', 'location', 'deleted', 'rev')
 ATT_COLS = ('id', 'noteId', 'kind', 'serverPath', 'thumbPath', 'width', 'height',
-            'duration', 'peaks', 'ocrText', 'transcript', 'sha256', 'createdAt')
+            'duration', 'peaks', 'ocrText', 'transcript', 'sha256', 'size', 'createdAt')
 JSON_FIELDS = {'tags', 'location', 'peaks', 'transcript'}
 
 
@@ -57,6 +57,9 @@ class Store:
         self.db_path = data_dir / 'jot.db'
         with closing(self._c()) as c, c:
             c.executescript(SCHEMA)
+            # v1.1 旧库补列：CREATE IF NOT EXISTS 不会给已存在的表加列
+            if 'size' not in {r[1] for r in c.execute('PRAGMA table_info(atts)')}:
+                c.execute('ALTER TABLE atts ADD COLUMN size INTEGER')
 
     def _c(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)

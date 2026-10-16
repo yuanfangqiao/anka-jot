@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /** VideoCard — 详情页视频附件块：16:9 海报 + ▶ 徽章 + 时长角标，点击全屏播放。 */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { mediaUrl, useUi, type JotAtt } from '../host'
 import * as db from '../lib/db'
 import { backfillAtt } from '../lib/media'
-import { fmtDur } from '../lib/format'
+import { fmtBytes, fmtDur } from '../lib/format'
 import VideoViewer from './VideoViewer.vue'
 
 const props = defineProps<{ att: JotAtt }>()
@@ -18,10 +18,25 @@ onMounted(async () => {
   if (poster.value && !poster.value.startsWith('blob:')) void backfillAtt(props.att, 'thumb')
 })
 
-/** 点击 → 全屏播放（本地 blob 优先，服务端路径兜底） */
+/** 右下角角标：时长 · 大小（旧数据无 size 时只显时长） */
+const badge = computed(() => {
+  const parts: string[] = []
+  if (props.att.duration) parts.push(fmtDur(props.att.duration))
+  if (props.att.size) parts.push(fmtBytes(props.att.size))
+  return parts.join(' · ')
+})
+
+/** 点击 → 全屏播放（本地 blob 优先，服务端路径兜底）。
+ *  回填不在此时并发——整文件下载会与播放流抢占带宽（原片动辄几十 MB），改到关闭后执行 */
 async function play() {
   playUrl.value = (await db.blobUrl(props.att.id)) ?? mediaUrl(props.att.serverPath)
-  if (playUrl.value && !playUrl.value.startsWith('blob:')) void backfillAtt(props.att)
+}
+
+/** 播放器关闭后再回填原片（下次离线可看；此时才允许占用带宽） */
+function onViewerClose() {
+  const url = playUrl.value
+  playUrl.value = null
+  if (url && !url.startsWith('blob:')) void backfillAtt(props.att)
 }
 </script>
 
@@ -29,7 +44,7 @@ async function play() {
   <div class="jot-videocard" role="button" aria-label="播放视频" @click="play">
     <img v-if="poster" :src="poster" alt="" loading="lazy" />
     <span class="jot-vid-play"><component :is="icons.Play" :size="20" /></span>
-    <span v-if="att.duration" class="jot-vid-dur">{{ fmtDur(att.duration) }}</span>
-    <VideoViewer :src="playUrl" @close="playUrl = null" />
+    <span v-if="badge" class="jot-vid-dur">{{ badge }}</span>
+    <VideoViewer :src="playUrl" @close="onViewerClose" />
   </div>
 </template>

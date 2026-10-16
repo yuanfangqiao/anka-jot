@@ -45,11 +45,13 @@ export function fmtDur(sec?: number | null): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** 字节数紧凑展示（窄角标用）：512B / 15KB / 12.3MB / 1.2GB */
 export function fmtBytes(n?: number | null): string {
-  if (!n) return '0 B'
+  if (!n || n < 1) return '0 B'
   if (n < 1024) return n + ' B'
-  if (n < 1048576) return (n / 1024).toFixed(0) + ' KB'
-  return (n / 1048576).toFixed(1) + ' MB'
+  if (n < 1048576) return (n / 1024).toFixed(0) + 'KB'
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + 'MB'
+  return (n / 1073741824).toFixed(1) + 'GB'
 }
 
 export function sameDay(a: number, b: number): boolean {

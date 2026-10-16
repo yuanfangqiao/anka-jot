@@ -142,7 +142,7 @@ export async function attachImage(noteId: string, src: Blob, pendingOcr = false)
   const p = await processImage(src)
   const att: JotAtt = {
     id: crypto.randomUUID(), noteId, kind: 'image', sha256: p.sha256,
-    width: p.width, height: p.height, createdAt: Date.now(), pendingOcr,
+    width: p.width, height: p.height, size: p.full.size, createdAt: Date.now(), pendingOcr,
   }
   await db.putBlob(att.id, p.full)
   await db.putBlob(att.id + ':thumb', p.thumb)
@@ -155,7 +155,7 @@ export async function attachAudio(noteId: string, blob: Blob, duration: number,
                                   peaks: number[], transcript: JotAtt['transcript']): Promise<JotAtt> {
   const att: JotAtt = {
     id: crypto.randomUUID(), noteId, kind: 'audio', duration,
-    peaks, transcript, sha256: await sha256Hex(blob), createdAt: Date.now(),
+    peaks, transcript, sha256: await sha256Hex(blob), size: blob.size, createdAt: Date.now(),
   }
   await db.putBlob(att.id, blob)
   await db.putAtt(att)
@@ -168,7 +168,7 @@ export async function attachVideo(noteId: string, blob: Blob): Promise<JotAtt> {
   const p = await processVideo(blob)
   const att: JotAtt = {
     id: crypto.randomUUID(), noteId, kind: 'video', sha256: p.sha256,
-    width: p.width, height: p.height, duration: p.duration, createdAt: Date.now(),
+    width: p.width, height: p.height, duration: p.duration, size: blob.size, createdAt: Date.now(),
   }
   await db.putBlob(att.id, blob)
   if (p.poster) await db.putBlob(att.id + ':thumb', p.poster)

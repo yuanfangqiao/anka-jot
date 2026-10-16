@@ -24,7 +24,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       @click="emit('close')"
     >
       <video
-        :src="src" class="max-h-full max-w-full" controls autoplay playsinline
+        :src="src" class="max-h-full max-w-full" controls autoplay playsinline preload="metadata"
         @click.stop
       />
       <button

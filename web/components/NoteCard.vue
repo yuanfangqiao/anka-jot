@@ -8,7 +8,7 @@ import { mediaUrl, useUi, type JotAtt, type JotNote } from '../host'
 import { coverOf } from '../state/store'
 import * as db from '../lib/db'
 import { backfillAtt } from '../lib/media'
-import { dayLabel, fmtClock, fmtDur } from '../lib/format'
+import { dayLabel, fmtClock, fmtBytes, fmtDur } from '../lib/format'
 import { hashCardColor } from '../lib/color'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
 import ImgViewer from './ImgViewer.vue'
@@ -29,6 +29,16 @@ type CardType = 'text' | 'image' | 'voice' | 'video' | 'composite'
 const imageAtts = computed<JotAtt[]>(() => props.note.atts?.filter(a => a.kind === 'image') ?? [])
 const audioAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'audio') ?? null)
 const videoAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'video') ?? null)
+
+/** 视频封面角标：时长 · 大小（旧数据无 size 时只显时长） */
+const vidBadge = computed(() => {
+  const a = videoAtt.value
+  if (!a) return ''
+  const parts: string[] = []
+  if (a.duration) parts.push(fmtDur(a.duration))
+  if (a.size) parts.push(fmtBytes(a.size))
+  return parts.join(' · ')
+})
 
 /** 正文（剥 markdown 标记） */
 const text = computed(() =>
@@ -158,7 +168,7 @@ const timeLabel = computed(() =>
           <span>视频同步中…</span>
         </div>
         <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
-        <span v-if="videoAtt?.duration" class="jot-vid-dur">{{ fmtDur(videoAtt.duration) }}</span>
+        <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
       </div>
       <div class="jot-card-foot">
         <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
@@ -191,7 +201,7 @@ const timeLabel = computed(() =>
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
         <template v-if="!imageAtts.length && videoAtt">
           <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
-          <span v-if="videoAtt.duration" class="jot-vid-dur">{{ fmtDur(videoAtt.duration) }}</span>
+          <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
         </template>
         <button
           v-if="audioAtt"

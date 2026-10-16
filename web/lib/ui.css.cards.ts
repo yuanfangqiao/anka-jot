@@ -110,6 +110,7 @@ export const CSS_CARDS = `
 }
 .jot-tc-foot {
   margin-top: auto;
+  width: 100%; /* 占满整行才能贴右（父级 align-items:center 会把窄内容收缩居中） */
   padding-top: 8px;
   display: flex;
   align-items: center;

@@ -32,7 +32,7 @@ export interface Seg { t0: number; t1: number; text: string; edited?: boolean }
 export interface JotAtt {
   id: string; noteId: string; kind: 'image' | 'audio' | 'video'
   serverPath?: string | null; thumbPath?: string | null
-  width?: number; height?: number; duration?: number
+  width?: number; height?: number; duration?: number; size?: number
   peaks?: number[] | null; ocrText?: string | null
   transcript?: Seg[] | null; sha256?: string; createdAt: number
   pendingOcr?: boolean
