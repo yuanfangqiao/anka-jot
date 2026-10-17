@@ -1,11 +1,11 @@
 <script setup lang="ts">
-/** Calendar — 屏④：月历打点 + 当日垂直时间轴（图集/音频/文本卡）。 */
+/** Calendar — 屏④：月历打点 + 当日垂直时间轴（左侧时刻 + 单列主页卡片列表）。 */
 import { computed, ref } from 'vue'
 import { useUi, type JotNote } from '../host'
 import { push } from '../lib/nav'
 import { dayLabel, fmtClock, sameDay } from '../lib/format'
 import { notes } from '../state/store'
-import Waveform from '../components/Waveform.vue'
+import NoteCard from '../components/NoteCard.vue'
 
 const icons = useUi().icons
 const now = new Date()
@@ -38,8 +38,6 @@ const dayNotes = computed(() =>
 
 function prev() { const d = new Date(year.value, month.value - 1, 1); year.value = d.getFullYear(); month.value = d.getMonth() }
 function next() { const d = new Date(year.value, month.value + 1, 1); year.value = d.getFullYear(); month.value = d.getMonth() }
-
-function firstAudio(n: JotNote) { return n.atts?.find(a => a.kind === 'audio') }
 </script>
 
 <template>
@@ -86,19 +84,8 @@ function firstAudio(n: JotNote) { return n.atts?.find(a => a.kind === 'audio') }
       <div v-for="n in dayNotes" :key="n.id" class="relative">
         <span class="jot-dot top-5 h-2 w-2 rounded-full border-2 border-bg-0 bg-brand" />
         <p class="mb-1 jot-fs-11 text-ink-2">{{ fmtClock(n.createdAt) }}</p>
-        <article
-          class="jot-press cursor-pointer rounded-card bg-bg-1 p-3.5 shadow-card duration-micro"
-          @click="push('note', { id: n.id })"
-        >
-          <p class="jot-fs-14 font-medium text-ink-0">{{ n.title || (n.text || '未命名').split('\n')[0].slice(0, 40) }}</p>
-          <p v-if="n.text && n.title" class="mt-0.5 jot-clamp-2 jot-fs-125 text-ink-1">{{ n.text.slice(0, 90) }}</p>
-          <div v-if="firstAudio(n)" class="mt-2">
-            <Waveform :peaks="firstAudio(n)!.peaks ?? []" :height="26" />
-          </div>
-          <p v-if="n.atts?.some(a => a.kind === 'image')" class="mt-1.5 flex items-center gap-1 jot-fs-11 text-ink-2">
-            <component :is="icons.Image" :size="12" />{{ n.atts.filter(a => a.kind === 'image').length }} 张图片
-          </p>
-        </article>
+        <!-- 与主页同款卡片；日期见组头、时刻在轴左侧，卡内不再重复 -->
+        <NoteCard :note="n" :show-day="false" :show-time="false" @open="push('note', { id: n.id })" />
       </div>
       <p v-if="!dayNotes.length" class="py-8 text-center jot-fs-125 text-ink-2">这一天没有记录</p>
     </div>

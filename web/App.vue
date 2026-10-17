@@ -38,8 +38,13 @@ const TABS = [
   { view: 'home', icon: 'House', label: '首页' },
   { view: 'calendar', icon: 'CalendarDays', label: '日历' },
   { view: 'discover', icon: 'Compass', label: '发现' },
-  { view: 'settings', icon: 'UserRound', label: '我的' },
 ]
+
+/** 「即刻」徽标即「我的」入口：压栈打开设置，系统返回回到原页 */
+function openSettings() {
+  if (nav.current.view === 'settings') return
+  push('settings')
+}
 
 const albumInput = ref<HTMLInputElement>()
 const videoInput = ref<HTMLInputElement>()
@@ -111,9 +116,14 @@ function onVideoChange(e: Event) {
     <!-- 顶部导航（取代底部 Tab，避开宿主 dock） -->
     <header v-if="showChrome" class="z-20 shrink-0 px-4 pt-3">
       <div class="jot-container flex items-center gap-3">
-        <p class="flex items-center gap-1.5 jot-fs-17 font-bold tracking-tight">
+        <button
+          type="button" title="我的" aria-label="我的"
+          class="flex cursor-pointer items-center gap-1.5 jot-fs-17 font-bold tracking-tight transition-colors"
+          :class="nav.current.view === 'settings' ? 'text-brand' : 'text-ink-0'"
+          @click="openSettings"
+        >
           <component :is="icons.NotebookPen" :size="18" class="text-brand" />即刻
-        </p>
+        </button>
         <nav class="jot-nav flex flex-1 items-center rounded-full bg-bg-1 p-1 shadow-card">
           <button
             v-for="t in TABS" :key="t.view" type="button"

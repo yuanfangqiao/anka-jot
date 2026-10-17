@@ -19,7 +19,9 @@ const props = withDefaults(defineProps<{
   tagColors?: Record<string, string | null>
   /** 时间线按天分组时组头已显示日期，卡片内隐藏避免重复 */
   showDay?: boolean
-}>(), { showDay: true })
+  /** 日历时间轴已显示时刻，卡内隐藏时间避免重复 */
+  showTime?: boolean
+}>(), { showDay: true, showTime: true })
 const emit = defineEmits<{ open: [] }>()
 const icons = useUi().icons
 
@@ -78,8 +80,15 @@ const hasCover = computed(() => imageAtts.value.length > 0 || Boolean(videoAtt.v
 /** 复合卡迷你播放钮（与语音小卡同源播放逻辑） */
 const { playing: compPlaying, toggle: compToggle } = useAudioPlayer(() => audioAtt.value)
 
-const timeLabel = computed(() =>
-  (props.showDay ? dayLabel(props.note.createdAt) + ' ' : '') + fmtClock(props.note.createdAt))
+const timeLabel = computed(() => {
+  if (!props.showTime) return ''
+  return (props.showDay ? dayLabel(props.note.createdAt) + ' ' : '') + fmtClock(props.note.createdAt)
+})
+
+/** 底部信息行只在有内容时占位（日历隐藏时间后不留空条） */
+const metaVisible = computed(() =>
+  Boolean(timeLabel.value) || props.note.syncState !== 'synced')
+const footVisible = computed(() => Boolean(title.value) || metaVisible.value)
 </script>
 
 <template>
@@ -99,7 +108,7 @@ const timeLabel = computed(() =>
         <component v-if="note.pinned" :is="icons.Pin" :size="13" class="jot-icon-inline" />{{ title || '·' }}
       </p>
       <p v-if="body" class="jot-tc-sub">{{ body }}</p>
-      <div class="jot-tc-foot">
+      <div v-if="metaVisible" class="jot-tc-foot">
         <span
           v-if="note.syncState !== 'synced'"
           class="h-1.5 w-1.5 rounded-full bg-warn"
@@ -115,7 +124,7 @@ const timeLabel = computed(() =>
         <MediaPreview :att="imageAtts[0] ?? videoAtt" />
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
       </div>
-      <div class="jot-card-foot">
+      <div v-if="footVisible" class="jot-card-foot">
         <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
         <span v-if="title" class="truncate">{{ title }}</span>
         <span class="flex-1" />
@@ -135,7 +144,7 @@ const timeLabel = computed(() =>
         <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
         <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
       </div>
-      <div class="jot-card-foot">
+      <div v-if="footVisible" class="jot-card-foot">
         <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
         <span v-if="title" class="truncate">{{ title }}</span>
         <span class="flex-1" />
@@ -176,7 +185,7 @@ const timeLabel = computed(() =>
           </h3>
           <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 text-ink-1">{{ body }}</p>
         </div>
-        <div class="jot-card-foot">
+        <div v-if="metaVisible" class="jot-card-foot">
           <span class="flex-1" />
           <span>{{ timeLabel }}</span>
           <span

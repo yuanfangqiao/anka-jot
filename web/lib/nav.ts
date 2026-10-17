@@ -4,7 +4,8 @@ import type { UiLike } from '../host'
 
 export interface NavItem { view: string; params: Record<string, string> }
 
-const TAB_ROOTS = new Set(['home', 'calendar', 'discover', 'settings'])
+/** 顶部三个标签为栈根；settings（我的）由「即刻」徽标压栈进入，故不是根。 */
+const TAB_ROOTS = new Set(['home', 'calendar', 'discover'])
 
 export const nav = reactive({
   stack: [{ view: 'home', params: {} }] as NavItem[],
