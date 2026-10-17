@@ -2,7 +2,7 @@
  *  一切写操作先落 IndexedDB（设备端事实源），同步由 lib/sync 后台接力。 */
 import { computed, reactive, ref } from 'vue'
 import type { JotAtt, JotNote, JotTag } from '../host'
-import { callJot, TAG_COLORS } from '../host'
+import { callJot, toast, TAG_COLORS } from '../host'
 import * as db from '../lib/db'
 import { processImage, sha256Hex } from '../lib/image'
 import { processVideo } from '../lib/video'
@@ -26,6 +26,29 @@ export const sortedNotes = computed(() =>
   [...notes.value].sort((a, b) =>
     Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt))
 
+/** 置顶上限：满 10 条时拒绝新的置顶（提示先取消一个） */
+export const PIN_LIMIT = 10
+
+/** 置顶时刻（本地 kv）：让置顶条严格按「置顶动作」倒序，后续编辑笔记不会把卡挪到最左 */
+const pinOrder = reactive<Record<string, number>>({})
+
+/** 补全历史数据的置顶时刻：没有记录的用 updatedAt 兜底，排序不会跳动 */
+async function loadPinOrder() {
+  const saved = (await db.kvGet<Record<string, number>>('pinOrder')) ?? {}
+  for (const [id, at] of Object.entries(saved)) pinOrder[id] = at
+  for (const n of notes.value) {
+    if (n.pinned && !pinOrder[n.id]) pinOrder[n.id] = n.updatedAt || n.createdAt
+  }
+}
+function savePinOrder() { void db.kvSet('pinOrder', { ...pinOrder }) }
+
+/** 置顶列表：最新置顶的排最左（最多 PIN_LIMIT 条） */
+export const pinnedNotes = computed(() =>
+  notes.value
+    .filter(n => n.pinned && !n.deleted)
+    .sort((a, b) =>
+      (pinOrder[b.id] ?? b.updatedAt) - (pinOrder[a.id] ?? a.updatedAt) || b.createdAt - a.createdAt))
+
 // ─── 初始化 ────────────────────────────────────────
 export async function initStore() {
   const [ns, ts] = await Promise.all([db.listNotes(), db.listTags()])
@@ -33,6 +56,7 @@ export async function initStore() {
   notes.value = ns
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
+  await loadPinOrder()
   settings.locationOn = (await db.kvGet<boolean>('locationOn')) ?? true
   settings.lang = (await db.kvGet<string>('lang')) ?? 'zh-CN'
   settings.selfieMirror = (await db.kvGet<boolean>('selfieMirror')) ?? true
@@ -47,6 +71,8 @@ export async function reload() {
   notes.value = ns
   tags.value = await db.listTags()
   for (const n of ns) index.upsert(n, n.atts ?? [])
+  // 同步可能带来别处置顶的笔记：补一条置顶时刻，避免排序退化成 0
+  for (const n of ns) if (n.pinned && !pinOrder[n.id]) pinOrder[n.id] = n.updatedAt || n.createdAt
   // 媒体组件观察附件元数据，自行更新展示来源。
   await refreshPending()
 }
@@ -55,7 +81,7 @@ export async function reload() {
 export function newNote(source: JotNote['source'] = 'text'): JotNote {
   return {
     id: crypto.randomUUID(), title: '', text: '', tags: [], source,
-    createdAt: Date.now(), updatedAt: Date.now(), pinned: false,
+    createdAt: Date.now(), updatedAt: Date.now(), pinned: false, fav: false,
     color: null, location: null, deleted: false, rev: 0, syncState: 'local', atts: [],
   }
 }
@@ -104,13 +130,32 @@ async function persist(note: JotNote) {
   await refreshPending()
 }
 
-export async function togglePin(note: JotNote) {
-  note.pinned = !note.pinned
+/** 置顶/取消置顶。返回是否真的落库（满额被拒时 false，调用方不要提示「已置顶」）。 */
+export async function togglePin(note: JotNote): Promise<boolean> {
+  if (!note.pinned) {
+    if (notes.value.filter(n => n.pinned && !n.deleted).length >= PIN_LIMIT) {
+      toast(`最多置顶 ${PIN_LIMIT} 条，请先取消一个`)
+      return false
+    }
+    note.pinned = true
+    pinOrder[note.id] = Date.now() // 记录置顶时刻：最新置顶排最左
+  } else {
+    note.pinned = false
+    delete pinOrder[note.id]
+  }
+  savePinOrder()
+  await persist(note)
+  return true
+}
+
+export async function toggleFav(note: JotNote) {
+  note.fav = !note.fav
   await persist(note)
 }
 
 export async function removeNote(note: JotNote) {
   cancelSave(note.id) // 取消残留防抖，防止删除后笔记被 persist 复活
+  if (pinOrder[note.id]) { delete pinOrder[note.id]; savePinOrder() }
   const cur = await db.getNote(note.id)
   if (cur) await db.putHistory(cur)
   await db.tombstone(note.id)

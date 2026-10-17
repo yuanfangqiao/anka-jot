@@ -1,18 +1,25 @@
 <script setup lang="ts">
-/** NoteCard — 主页时间线卡片：按内容分五类，尺寸固定、内容即类型。
- *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；图片卡 = 满幅封面（3:4，点图全屏预览）；
- *  视频卡 = 海报封面（3:4，▶ + 时长角标，点封面全屏播放）；语音卡 = 64px 矮条语音条；
- *  复合卡 = 3:4 上封面（图或视频海报）下文（封面点预览/播放、文区进详情）。 */
+/** NoteCard — 时间线卡片：按内容分五类，尺寸固定、内容即类型。
+ *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；
+ *  待办笔记 = 走 3:4 复合卡，但只显示 标题 → 正文 → 待办清单；
+ *             图、视频、语音等附件全部让位，卡面不出现任何附件位；
+ *  图片卡 = 满幅封面（3:4，点图全屏预览）；视频卡 = 海报封面（3:4，▶ + 时长角标，点封面全屏播放）；
+ *  纯语音卡 = 长条（原语音条形态不变，约 76px，点语音条播放、点其余处进编辑）；
+ *  复合卡 = 3:4 与图片卡同尺寸：标题 → 正文 → 媒体（图 / 视频海报 / 语音条）。
+ *  底部统一 CardFoot：左时间，右「⋯」（菜单由 App 级 CardMenu 承载）。 */
 import { computed, ref } from 'vue'
-import { useUi, type JotAtt, type JotNote } from '../host'
+import { toast, useUi, type JotAtt, type JotNote } from '../host'
 import { useMedia } from '../lib/useMedia'
 import MediaPreview from './MediaPreview.vue'
+import CardFoot from './CardFoot.vue'
 import { dayLabel, fmtClock, fmtBytes, fmtDur } from '../lib/format'
 import { hashCardColor } from '../lib/color'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
 import ImgViewer from './ImgViewer.vue'
 import VideoViewer from './VideoViewer.vue'
-import VoiceMini from './VoiceMini.vue'
+import { askConfirm } from '../state/confirm'
+import { splitTodoText } from '../lib/todos'
+import { togglePin } from '../state/store'
 
 const props = withDefaults(defineProps<{
   note: JotNote
@@ -31,7 +38,7 @@ const imageAtts = computed<JotAtt[]>(() => props.note.atts?.filter(a => a.kind =
 const audioAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'audio') ?? null)
 const videoAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'video') ?? null)
 
-/** 视频封面角标：时长 · 大小（旧数据无 size 时只显时长） */
+/** 视频封面角标：时长 · 大小（老数据无 size 时只显时长） */
 const vidBadge = computed(() => {
   const a = videoAtt.value
   if (!a) return ''
@@ -41,27 +48,45 @@ const vidBadge = computed(() => {
   return parts.join(' · ')
 })
 
-/** 正文（剥 markdown 标记） */
-const text = computed(() =>
-  (props.note.text || '').replace(/^#+\s*/gm, '').replace(/[-*] \[[ x]\] /g, '☐ ').trim())
+/** 正文与待办拆开：预览不露原始 - [ ] 标记，待办按「正文之后、媒体之前」单列 */
+const parsed = computed(() => splitTodoText(props.note.text || ''))
+const todos = computed(() => parsed.value.todos)
+const todosDone = computed(() => todos.value.filter(t => t.done).length)
+const todoStat = computed(() => (todos.value.length
+  ? { done: todosDone.value, total: todos.value.length }
+  : null))
+const todoPct = computed(() => (todos.value.length ? Math.round(todosDone.value / todos.value.length * 100) : 0))
+/** 卡面最多放五行，余下的用「还有 n 条」收口 */
+const cardTodos = computed(() => todos.value.slice(0, 5))
+/** 正文（剥 markdown 标记，不含待办行） */
+const text = computed(() => parsed.value.body.replace(/^#+\s*/gm, '').trim())
 
-/** 卡片类型判定：纯语音 / 纯视频 / 纯图片 / 纯文字 / 其余一律复合 */
+/** 是否算「有文字」：标题/待办也算，避免纯清单笔记被压成语音条 */
+const hasText = computed(() =>
+  Boolean(props.note.title) || text.value.length > 0 || Boolean(todoStat.value))
+
+/** 卡片类型：待办优先——有清单就升格为 3:4 卡且只露清单，图 / 视频 / 语音一概不参与卡面；
+ *  无待办时纯语音仍是长条，「媒体 + 文字」或「图 + 语音」才是复合卡 */
 const cardType = computed<CardType>(() => {
   const hasImg = imageAtts.value.length > 0
   const hasAud = Boolean(audioAtt.value)
   const hasVid = Boolean(videoAtt.value)
-  const hasTxt = text.value.length > 0
-  if (hasAud && !hasImg && !hasTxt && !hasVid) return 'voice'
-  if (hasVid && !hasImg && !hasTxt && !hasAud) return 'video'
-  if (hasImg && !hasTxt && !hasAud && !hasVid) return 'image'
+  if (todos.value.length) return 'composite'
   if (!hasImg && !hasAud && !hasVid) return 'text'
+  if (hasAud && !hasImg && !hasVid && !hasText.value) return 'voice'
+  if (hasVid && !hasImg && !hasAud && !hasText.value) return 'video'
+  if (hasImg && !hasAud && !hasVid && !hasText.value) return 'image'
   return 'composite'
 })
 
-/** 标题：无标题时取正文首行（文字卡直接以正文为主角，不再出现「未命名」） */
-const title = computed(() => props.note.title || text.value.split('\n')[0] || '')
+/** 标题：无标题时取正文首行，纯清单笔记取第一条待办 */
+const title = computed(() =>
+  props.note.title || text.value.split('\n')[0] || parsed.value.todos[0]?.text || '')
 const body = computed(() =>
   props.note.title ? text.value : text.value.split('\n').slice(1).join(' ').trim())
+
+/** 卡面首行：有清单时不再把第一条待办当标题重复一遍，清单自己会说话 */
+const heading = computed(() => props.note.title || (todos.value.length ? '' : title.value))
 
 /** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
 const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
@@ -74,143 +99,197 @@ const { src: playUrl, failed: videoFailed } = useMedia(() => videoSelection.valu
 function openPreview() { previewAtt.value = imageAtts.value[0] ?? null }
 function playVideo() { videoSelection.value = videoAtt.value }
 
-/** 复合卡封面：有图用图，无图用视频海报 */
-const hasCover = computed(() => imageAtts.value.length > 0 || Boolean(videoAtt.value))
+/** 语音播放：纯语音卡与复合卡内的语音条各自独立实例 */
+const { playing: compPlaying, progress: compProgress, toggle: compToggle } = useAudioPlayer(() => audioAtt.value)
+const { playing: voicePlaying, progress: voiceProgress, toggle: voiceToggle } = useAudioPlayer(() => audioAtt.value)
 
-/** 复合卡迷你播放钮（与语音小卡同源播放逻辑） */
-const { playing: compPlaying, toggle: compToggle } = useAudioPlayer(() => audioAtt.value)
+/** 波形：优先真实 peaks，无 peaks 的老录音用静态装饰波形 */
+const PLACEHOLDER = [0.32, 0.55, 0.78, 0.5, 0.9, 0.62, 0.4, 0.7, 0.45, 0.85, 0.58, 0.36, 0.66, 0.48, 0.74, 0.42, 0.6, 0.3]
+function makeBars(peaks: number[] | undefined, count: number) {
+  const src = peaks?.length ? peaks : PLACEHOLDER
+  const out: number[] = []
+  for (let i = 0; i < count; i++) out.push(src[Math.floor(i / count * src.length)] ?? 0.05)
+  return out
+}
+const voiceBars = computed(() => makeBars(audioAtt.value?.peaks, 26))
+const compBars = computed(() => makeBars(audioAtt.value?.peaks, 22))
 
 const timeLabel = computed(() => {
   if (!props.showTime) return ''
   return (props.showDay ? dayLabel(props.note.createdAt) + ' ' : '') + fmtClock(props.note.createdAt)
 })
 
-/** 底部信息行只在有内容时占位（日历隐藏时间后不留空条） */
-const metaVisible = computed(() =>
-  Boolean(timeLabel.value) || props.note.syncState !== 'synced')
-const footVisible = computed(() => Boolean(title.value) || metaVisible.value)
+/** 点右上角置顶角标：先确认再取消置顶（避免误触把置顶弄丢），角标点击不冒泡进详情 */
+async function unpinByBadge() {
+  const name = (props.note.title || text.value).slice(0, 18)
+  const ok = await askConfirm({
+    title: '取消置顶？',
+    message: name ? `「${name}」会回到时间线` : '这条笔记会回到时间线',
+    confirmText: '取消置顶',
+    danger: true,
+  })
+  if (!ok) return
+  if (await togglePin(props.note)) toast('已取消置顶')
+}
 </script>
 
 <template>
-  <!-- 语音小卡：矮条语音条独立分发 -->
-  <VoiceMini v-if="cardType === 'voice'" :att="audioAtt!" :time="timeLabel" />
+  <!-- 纯语音卡：长条语音条（形态不变）+ 信息行；点语音条播放，点其余处进编辑 -->
+  <article
+    v-if="cardType === 'voice'"
+    class="jot-card jot-card-voice"
+    :class="{ 'opacity-60': note.deleted, 'is-pinned': note.pinned }"
+    @click="emit('open')"
+  >
+    <button
+      v-if="note.pinned" type="button" class="jot-card-pin"
+      title="已置顶，点击取消" aria-label="取消置顶"
+      @click.stop="unpinByBadge"
+    >
+      <component :is="icons.Pin" :size="12" />
+    </button>
+    <div
+      class="jot-voicebar" role="button"
+      :aria-label="voicePlaying ? '暂停语音' : '播放语音'"
+      @click.stop="voiceToggle"
+    >
+      <span class="jot-voicebar-play">
+        <component :is="voicePlaying ? icons.Pause : icons.Play" :size="13" />
+      </span>
+      <span class="jot-voicebar-wave">
+        <span
+          v-for="(p, i) in voiceBars" :key="i"
+          class="jot-voicebar-bar"
+          :style="{ height: Math.max(3, p * 20) + 'px', opacity: i / voiceBars.length <= voiceProgress ? 1 : 0.3 + p * 0.4 }"
+        />
+      </span>
+      <span class="jot-voicebar-dur">{{ fmtDur(audioAtt?.duration) }}</span>
+    </div>
+    <CardFoot :note="note" :time="timeLabel" :title="note.title || ''" :todo="todoStat" />
+  </article>
 
-  <!-- 标准卡：文字卡 1:1 方卡，图片 / 复合 3:4 竖卡，比例固定 -->
+  <!-- 其余四类：固定比例卡 -->
   <article
     v-else
     class="jot-card"
-    :class="[cardType === 'text' ? 'jot-card-text' : 'jot-card-std', { 'opacity-60': note.deleted }]"
+    :class="[cardType === 'text' ? 'jot-card-text' : 'jot-card-std', { 'opacity-60': note.deleted, 'is-pinned': note.pinned }]"
     @click="emit('open')"
   >
+    <!-- 置顶角标：右上角统一位置，不参与文字流 -->
+    <button
+      v-if="note.pinned" type="button" class="jot-card-pin"
+      title="已置顶，点击取消" aria-label="取消置顶"
+      @click.stop="unpinByBadge"
+    >
+      <component :is="icons.Pin" :size="12" />
+    </button>
+
     <!-- 文字卡：彩底语录 -->
     <div v-if="cardType === 'text'" class="jot-textcard" :style="tcStyle">
-      <p class="jot-tc-quote">
-        <component v-if="note.pinned" :is="icons.Pin" :size="13" class="jot-icon-inline" />{{ title || '·' }}
-      </p>
+      <p class="jot-tc-quote">{{ title || '·' }}</p>
       <p v-if="body" class="jot-tc-sub">{{ body }}</p>
-      <div v-if="metaVisible" class="jot-tc-foot">
-        <span
-          v-if="note.syncState !== 'synced'"
-          class="h-1.5 w-1.5 rounded-full bg-warn"
-          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
-        />
-        <span>{{ timeLabel }}</span>
-      </div>
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" class="jot-tc-cardfoot" />
     </div>
 
     <!-- 图片卡：满幅封面，点图预览 -->
     <template v-else-if="cardType === 'image'">
       <div class="jot-imgcard" @click.stop="openPreview">
-        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
+        <MediaPreview :att="imageAtts[0]" />
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
       </div>
-      <div v-if="footVisible" class="jot-card-foot">
-        <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
-        <span v-if="title" class="truncate">{{ title }}</span>
-        <span class="flex-1" />
-        <span>{{ timeLabel }}</span>
-        <span
-          v-if="note.syncState !== 'synced'"
-          class="h-1.5 w-1.5 rounded-full bg-warn"
-          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
-        />
-      </div>
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" />
     </template>
 
     <!-- 视频卡：海报封面 + 中央 ▶ + 左下时长角标，点封面全屏播放 -->
     <template v-else-if="cardType === 'video'">
       <div class="jot-imgcard" @click.stop="playVideo">
-        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
+        <MediaPreview :att="videoAtt" />
         <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
         <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
       </div>
-      <div v-if="footVisible" class="jot-card-foot">
-        <component v-if="note.pinned" :is="icons.Pin" :size="11" class="text-brand" />
-        <span v-if="title" class="truncate">{{ title }}</span>
-        <span class="flex-1" />
-        <span>{{ timeLabel }}</span>
-        <span
-          v-if="note.syncState !== 'synced'"
-          class="h-1.5 w-1.5 rounded-full bg-warn"
-          :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
-        />
-      </div>
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" />
     </template>
 
-    <!-- 复合卡：上封面（图或视频海报）下文；无封面复合（语音+文字）退化为彩卡 + 迷你播放钮 -->
+    <!-- 复合卡：标题 → 正文 → （有清单时只显示清单）→ 媒体，整卡 3:4 -->
     <template v-else>
+      <div v-if="heading || body" class="jot-comp-body">
+        <h3 class="jot-clamp-2 jot-fs-125 font-semibold leading-snug text-ink-0">{{ heading }}</h3>
+        <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 leading-relaxed text-ink-1">{{ body }}</p>
+      </div>
+
+      <!-- 待办域：有清单就占满卡面剩余空间，图 / 视频 / 语音一概不显示 -->
+      <div v-if="todos.length" class="jot-comp-todos">
+        <div class="jot-comp-todos-head">
+          <span class="jot-comp-todos-title">待办</span>
+          <span class="jot-comp-todos-count">{{ todosDone }}/{{ todos.length }}</span>
+          <span class="jot-comp-todos-bar"><i :style="{ width: todoPct + '%' }" /></span>
+        </div>
+        <div
+          v-for="t in cardTodos" :key="t.id"
+          class="jot-comp-todo" :class="{ 'is-done': t.done }"
+        >
+          <span class="jot-comp-todo-box">{{ t.done ? '✓' : '' }}</span>
+          <span class="jot-comp-todo-text">{{ t.text }}</span>
+        </div>
+        <div v-if="todos.length > cardTodos.length" class="jot-comp-todos-more">
+          还有 {{ todos.length - cardTodos.length }} 条
+        </div>
+      </div>
+
       <div
-        v-if="hasCover" class="jot-comp-img"
-        @click.stop="imageAtts.length ? openPreview() : playVideo()"
+        v-else
+        class="jot-comp-media"
+        @click.stop="imageAtts.length ? openPreview() : videoAtt ? playVideo() : null"
       >
-        <MediaPreview :att="imageAtts[0] ?? videoAtt" />
-        <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
-        <template v-if="!imageAtts.length && videoAtt">
+        <!-- 图（多图角标） -->
+        <template v-if="imageAtts.length">
+          <MediaPreview :att="imageAtts[0]" />
+          <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
+        </template>
+        <!-- 视频海报 -->
+        <template v-else-if="videoAtt">
+          <MediaPreview :att="videoAtt" />
           <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
           <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
         </template>
-        <button
-          v-if="audioAtt"
-          type="button" class="jot-comp-play cursor-pointer"
+        <!-- 纯语音条作为主媒体 -->
+        <div
+          v-else-if="audioAtt" class="jot-comp-voicepad"
+          role="button"
           :aria-label="compPlaying ? '暂停语音' : '播放语音'"
           @click.stop="compToggle"
         >
-          <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
-        </button>
-      </div>
-      <template v-if="hasCover">
-        <div class="jot-comp-body">
-          <h3 class="jot-clamp-2 jot-fs-125 font-semibold leading-snug text-ink-0">
-            <component v-if="note.pinned" :is="icons.Pin" :size="12" class="jot-icon-inline mr-0.5 inline-block text-brand" />{{ title }}
-          </h3>
-          <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 text-ink-1">{{ body }}</p>
+          <div class="jot-voicebar">
+            <span class="jot-voicebar-play">
+              <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
+            </span>
+            <span class="jot-voicebar-wave">
+              <span
+                v-for="(p, i) in compBars" :key="i"
+                class="jot-voicebar-bar"
+                :style="{ height: Math.max(3, p * 18) + 'px', opacity: i / compBars.length <= compProgress ? 1 : 0.3 + p * 0.4 }"
+              />
+            </span>
+            <span class="jot-voicebar-dur">{{ fmtDur(audioAtt.duration) }}</span>
+          </div>
         </div>
-        <div v-if="metaVisible" class="jot-card-foot">
-          <span class="flex-1" />
-          <span>{{ timeLabel }}</span>
-          <span
-            v-if="note.syncState !== 'synced'"
-            class="h-1.5 w-1.5 rounded-full bg-warn"
-            :title="note.syncState === 'syncing' ? '同步中' : '已本地保存'"
-          />
-        </div>
-      </template>
-      <div v-else class="jot-textcard" :style="tcStyle">
-        <p class="jot-tc-quote">{{ title || '语音笔记' }}</p>
-        <p v-if="body" class="jot-tc-sub">{{ body }}</p>
+
+        <!-- 图 / 视频 + 语音：玻璃小胶囊，不抢版面 -->
         <button
-          v-if="audioAtt"
-          type="button" class="jot-comp-play cursor-pointer"
+          v-if="audioAtt && (imageAtts.length || videoAtt)"
+          type="button" class="jot-comp-voicechip"
           :aria-label="compPlaying ? '暂停语音' : '播放语音'"
-          :style="{ background: 'rgb(0 0 0 / 0.28)' }"
           @click.stop="compToggle"
         >
-          <component :is="compPlaying ? icons.Pause : icons.Play" :size="13" />
+          <component :is="compPlaying ? icons.Pause : icons.Play" :size="11" />{{ fmtDur(audioAtt.duration) }}
         </button>
       </div>
+
+      <!-- 待办已在卡面单列，脚下不再重复进度胶囊 -->
+      <CardFoot :note="note" :time="timeLabel" />
     </template>
 
-    <!-- 全屏图片预览 / 视频播放（共用查看器） -->
+    <!-- 全屏图片预览 / 视频播放 -->
     <ImgViewer :src="preview" @close="previewAtt = null" @error="previewFailed" />
     <VideoViewer :src="playUrl" @close="videoSelection = null" @error="videoFailed" />
   </article>

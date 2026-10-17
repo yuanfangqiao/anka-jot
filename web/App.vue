@@ -1,21 +1,26 @@
 <script setup lang="ts">
 /** App — Jot 根组件：视图出口（useNav 栈）+ 顶部标签导航。
  *  底部是宿主 dock 的地盘，Jot 不渲染任何悬浮按钮/底部栏（四入口在首页底部固定）。 */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { toast, useUi } from './host'
 import { goTab, nav, push } from './lib/nav'
 import { attachImage, attachVideo, captureLocation, flushSave, newNote } from './state/store'
 import { isVideoFile, VIDEO_MAX_BYTES } from './lib/video'
 import { startThemeFollow, stopThemeFollow } from './lib/theme'
+import { closeCardMenu, menuNote } from './state/menu'
+import { cancelConfirm, confirmReq } from './state/confirm'
 import Home from './views/Home.vue'
 import Detail from './views/Detail.vue'
 import RecordView from './views/Record.vue'
 import CameraView from './views/Camera.vue'
 import Calendar from './views/Calendar.vue'
+import Todo from './views/Todo.vue'
+import Favs from './views/Favs.vue'
 import Discover from './views/Discover.vue'
 import Search from './views/Search.vue'
 import Settings from './views/Settings.vue'
-import OfflineBanner from './components/OfflineBanner.vue'
+import CardMenu from './components/CardMenu.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const ui = useUi()
 const icons = ui.icons
@@ -27,7 +32,7 @@ onBeforeUnmount(stopThemeFollow)
 
 const VIEWS: Record<string, any> = {
   home: Home, note: Detail, record: RecordView, camera: CameraView,
-  calendar: Calendar, discover: Discover, search: Search, settings: Settings,
+  calendar: Calendar, todo: Todo, favs: Favs, discover: Discover, search: Search, settings: Settings,
 }
 const curView = computed(() => VIEWS[nav.current.view] ?? Home)
 const curParams = computed(() => nav.current.params)
@@ -37,8 +42,13 @@ const showChrome = computed(() => !fullscreen.value)
 const TABS = [
   { view: 'home', icon: 'House', label: '首页' },
   { view: 'calendar', icon: 'CalendarDays', label: '日历' },
+  { view: 'todo', icon: 'ListChecks', label: '待办' },
+  { view: 'favs', icon: 'Star', label: '收藏' },
   { view: 'discover', icon: 'Compass', label: '发现' },
 ]
+
+/** 切页/进详情时收起卡片菜单与确认弹层，避免遮罩残留 */
+watch(() => nav.current.view, () => { closeCardMenu(); cancelConfirm() })
 
 /** 「即刻」徽标即「我的」入口：压栈打开设置，系统返回回到原页 */
 function openSettings() {
@@ -124,29 +134,31 @@ function onVideoChange(e: Event) {
         >
           <component :is="icons.NotebookPen" :size="18" class="text-brand" />即刻
         </button>
-        <nav class="jot-nav flex flex-1 items-center rounded-full bg-bg-1 p-1 shadow-card">
+        <nav class="jot-nav flex flex-1 items-center gap-0.5 rounded-full bg-bg-1 p-1 shadow-card">
           <button
             v-for="t in TABS" :key="t.view" type="button"
-            class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 py-2 jot-fs-13 transition-colors"
-            :class="nav.current.view === t.view ? 'bg-brand font-medium text-white' : 'text-ink-1 hover:text-ink-0'"
+            class="jot-nav-btn" :class="{ 'is-on': nav.current.view === t.view }"
             @click="goTab(t.view)"
           >
-            <component :is="icons[t.icon]" :size="15" />{{ t.label }}
+            <component :is="icons[t.icon]" :size="14" />{{ t.label }}
           </button>
         </nav>
 
-      </div>
-      <div class="jot-container mt-2">
-        <OfflineBanner />
       </div>
     </header>
 
     <!-- 主区 -->
     <main class="relative min-h-0 flex-1">
-      <KeepAlive :include="['Home', 'Calendar']">
+      <KeepAlive :include="['Home', 'Calendar', 'Todo', 'Favs']">
         <component :is="curView" v-bind="curParams" @create="onPick" />
       </KeepAlive>
     </main>
+
+    <!-- 卡片「⋯」快速菜单：App 级覆盖层，卡片自身 overflow 不会裁掉它 -->
+    <CardMenu v-if="menuNote" />
+
+    <!-- 二次确认（取消置顶等）：同样 App 级覆盖层，避免被卡片 overflow 裁掉 -->
+    <ConfirmDialog v-if="confirmReq" />
 
     <input ref="albumInput" type="file" accept="image/*,video/*" multiple class="hidden" @change="onAlbumChange" />
     <!-- 移动端 capture 直呼系统相机录像模式（免网页授权，对齐拍照路线） -->

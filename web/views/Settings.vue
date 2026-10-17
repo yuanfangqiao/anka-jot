@@ -5,6 +5,7 @@ import { callJot, useUi } from '../host'
 import { allAtts, kvSet, listNotes, usage } from '../lib/db'
 import { syncNow, syncState } from '../lib/sync'
 import { settings, notes } from '../state/store'
+import OfflineBanner from '../components/OfflineBanner.vue'
 
 const icons = useUi().icons
 const used = ref('—')
@@ -96,6 +97,8 @@ async function exportJson() {
 
     <section class="rounded-card bg-bg-1 p-4 shadow-card">
       <p class="mb-3 jot-fs-12 font-semibold text-ink-1">数据</p>
+      <!-- 同步异常/待同步详情只在这里出现，首页不再占一行 -->
+      <OfflineBanner class="mb-2" />
       <div class="flex items-center justify-between py-1.5 jot-fs-14">
         <span class="text-ink-0">本地存储</span>
         <span class="text-ink-2">{{ used }} · {{ notes.length }} 条笔记</span>

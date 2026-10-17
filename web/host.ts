@@ -46,6 +46,8 @@ export interface JotNote {
   id: string; title: string; text: string; tags: string[]
   source: 'text' | 'camera' | 'album' | 'voice' | 'share'
   createdAt: number; updatedAt: number; pinned: boolean
+  /** 收藏（与置顶独立：置顶影响排序，收藏只做标记与筛选） */
+  fav?: boolean
   color: string | null; location: { lat: number; lng: number; name?: string } | null
   deleted: boolean; rev: number
   syncState?: 'local' | 'syncing' | 'synced'

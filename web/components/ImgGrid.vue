@@ -17,8 +17,8 @@ function openFull(a: JotAtt) { selected.value = a }
 
 <template>
   <div>
-    <div class="grid grid-cols-3 gap-1.5">
-      <div v-for="a in atts" :key="a.id" class="group relative aspect-square overflow-hidden rounded-xl bg-bg-2">
+    <div class="jot-grid-3">
+      <div v-for="a in atts" :key="a.id" class="jot-sq group relative overflow-hidden rounded-xl bg-bg-2">
         <MediaPreview :att="a" @click="openFull(a)" />
         <button
           type="button"

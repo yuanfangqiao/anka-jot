@@ -1,13 +1,15 @@
 <script setup lang="ts">
-/** Home — 屏①：搜索、时间线卡片流、底部细长四入口工具条、置顶区。 */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+/** Home — 屏①：搜索 + 筛选、置顶横滑条、时间线卡片流、底部细长五入口工具条。 */
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useUi, type JotNote } from '../host'
 import { push } from '../lib/nav'
-import { sortedNotes, tags } from '../state/store'
+import { pinnedNotes, sortedNotes, tags } from '../state/store'
 import { dayLabelFull, sameDay } from '../lib/format'
 import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
+import FilterSheet from '../components/FilterSheet.vue'
 import { usePullRefresh } from '../lib/usePullRefresh'
+import { useColCount, splitCols } from '../lib/useColCount'
 
 const emit = defineEmits<{ create: [kind: 'text' | 'camera' | 'video' | 'album' | 'voice'] }>()
 const icons = useUi().icons
@@ -16,12 +18,31 @@ const { distance, refreshing, label } = usePullRefresh(list)
 
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
 
-const pinned = computed(() => sortedNotes.value.filter(n => n.pinned))
+/** 置顶条：store 已按「最新置顶」倒序排好（最多 10 条），最新在最左 */
+const pinned = pinnedNotes
 const flow = computed(() => sortedNotes.value.filter(n => !n.pinned))
 
-/** 五入口：细长工具条，墨色系图标，主入口用品牌色 */
+/** 置顶条：卡片宽度对齐时间线单列，超出可视区才给左右箭头（>2 张） */
+const shelf = ref<HTMLElement | null>(null)
+const shelfEdge = ref({ left: false, right: false })
+function syncShelfEdge() {
+  const el = shelf.value
+  if (!el) { shelfEdge.value = { left: false, right: false }; return }
+  const max = el.scrollWidth - el.clientWidth
+  shelfEdge.value = { left: el.scrollLeft > 1, right: max > 1 && el.scrollLeft < max - 1 }
+}
+function scrollShelf(dir: -1 | 1) {
+  const el = shelf.value
+  if (!el) return
+  const first = el.firstElementChild as HTMLElement | null
+  el.scrollBy({ left: dir * ((first?.offsetWidth ?? el.clientWidth * 0.8) + 10), behavior: 'smooth' })
+}
+watch(pinned, () => nextTick(syncShelfEdge), { flush: 'post' })
+onActivated(() => nextTick(syncShelfEdge))
+
+/** 五入口：细长工具条；每格一个深色瓷贴（藏蓝/墨绿/靛紫/赭橙/酒红），样式见 jot-bar-item-* */
 const QUICK = [
-  { kind: 'text', icon: 'Type', label: '文本', main: true },
+  { kind: 'text', icon: 'Type', label: '文本' },
   { kind: 'camera', icon: 'Camera', label: '拍照' },
   { kind: 'video', icon: 'Video', label: '视频' },
   { kind: 'album', icon: 'Images', label: '相册' },
@@ -30,43 +51,28 @@ const QUICK = [
 
 function open(n: JotNote) { push('note', { id: n.id }) }
 
-// @标签快捷过滤
+// @标签快捷过滤 + 收藏筛选（两者可叠加），入口收在搜索框右侧的筛选弹层
 const activeTag = ref('')
-const visibleFlow = computed(() =>
-  activeTag.value ? flow.value.filter(n => n.tags.includes(activeTag.value)) : flow.value)
+const favOnly = ref(false)
+const filterOpen = ref(false)
+const visibleFlow = computed(() => flow.value.filter(n =>
+  (!favOnly.value || n.fav) && (!activeTag.value || n.tags.includes(activeTag.value))))
+/** KeepAlive 缓存页面：离开时收掉弹层，回来不残留遮罩 */
+onDeactivated(() => { filterOpen.value = false })
 
-/** 响应式列数（JS matchMedia，不赌宿主 md:/lg: 变体是否存在）：
- *  手机 2 列 / ≥768px 3 列 / ≥1280px 4 列 */
-const colCount = ref(2)
-const MQ = ['(min-width: 1280px)', '(min-width: 768px)'] as const
-const mqs: MediaQueryList[] = []
-function syncCols() {
-  colCount.value = window.matchMedia(MQ[0]).matches ? 4
-    : window.matchMedia(MQ[1]).matches ? 3 : 2
+/** 弹层回传筛选补丁（只带变化的字段，避免覆盖另一项） */
+function applyFilter(patch: { activeTag?: string; favOnly?: boolean }) {
+  if (patch.activeTag !== undefined) activeTag.value = patch.activeTag
+  if (patch.favOnly !== undefined) favOnly.value = patch.favOnly
 }
-onMounted(() => {
-  for (const q of MQ) {
-    const m = window.matchMedia(q)
-    m.addEventListener('change', syncCols)
-    mqs.push(m)
-  }
-  syncCols()
-})
-onBeforeUnmount(() => {
-  for (const m of mqs) m.removeEventListener('change', syncCols)
-  mqs.length = 0
-})
 
-/** 均分 N 列（短列优先，按数量近似；卡片高度未知时最稳的策略） */
-function splitCols(list: JotNote[], n: number): JotNote[][] {
-  const cols: JotNote[][] = Array.from({ length: n }, () => [])
-  for (const it of list) {
-    let min = 0
-    for (let i = 1; i < n; i++) if (cols[i].length < cols[min].length) min = i
-    cols[min].push(it)
-  }
-  return cols
-}
+/** 响应式列数（与收藏页共用 lib/useColCount） */
+const colCount = useColCount()
+/** 置顶卡宽度 = 时间线单列宽度（gap 10px 与 .jot-cols 一致） */
+const shelfItemW = computed(() => `calc((100% - ${(colCount.value - 1) * 10}px) / ${colCount.value})`)
+watch(colCount, () => nextTick(syncShelfEdge))
+onMounted(() => window.addEventListener('resize', syncShelfEdge))
+onBeforeUnmount(() => window.removeEventListener('resize', syncShelfEdge))
 
 /** 时间线按创建日分组：今天 / 昨天 / 10月3日…（排序已按 createdAt，分组必然连续）。
  *  N 列手动拆分（短列优先），不依赖 CSS columns —— 部分宿主构建不含该工具类 */
@@ -85,7 +91,6 @@ const grouped = computed(() => {
   }
   return gs
 })
-const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
 </script>
 
 <template>
@@ -94,41 +99,56 @@ const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
     <div ref="list" class="jot-refresh-list jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
       <div v-if="distance || refreshing" class="jot-refresh-status" role="status"
         :style="{ height: distance + 'px', lineHeight: distance + 'px' }">{{ label }}</div>
-      <!-- 搜索栏 -->
-      <button
-        type="button"
-        class="flex w-full cursor-text items-center gap-2 rounded-full bg-bg-1 px-4 py-2.5 text-left jot-fs-13 text-ink-2 shadow-card"
-        @click="push('search')"
-      >
-        <component :is="icons.Search" :size="15" />
-        搜索文字、语音、OCR…
-      </button>
-
-    <!-- 标签过滤 -->
-    <div v-if="tags.length" class="flex gap-1.5 overflow-x-auto py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <button
-        type="button"
-        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
-        :class="!activeTag ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
-        @click="activeTag = ''"
-      >全部</button>
-      <button
-        v-for="t in tags.slice(0, 12)" :key="t.name" type="button"
-        class="shrink-0 cursor-pointer rounded-full px-2.5 py-1 jot-fs-115 transition-colors"
-        :class="activeTag === t.name ? 'bg-brand text-white' : 'bg-bg-1 text-ink-1'"
-        @click="activeTag = activeTag === t.name ? '' : t.name"
-      >{{ t.name }}</button>
-    </div>
-
-    <!-- 置顶（响应式 N 列） -->
-    <section v-if="pinned.length">
-      <div class="jot-date-sep"><span class="jot-date-sep-label">置顶</span></div>
-      <div class="jot-cols">
-        <div v-for="(col, ci) in pinnedCols" :key="ci" class="jot-col">
-          <NoteCard v-for="n in col" :key="n.id" :note="n" :tag-colors="tagColorMap" @open="open(n)" />
-        </div>
+      <!-- 搜索行：搜索框 + 筛选按钮（筛选收进底部弹层，首页更干净） -->
+      <div class="jot-search-row">
+        <button
+          type="button"
+          class="jot-search flex cursor-text items-center gap-2 rounded-full bg-bg-1 px-4 py-2.5 text-left jot-fs-13 text-ink-2 shadow-card"
+          @click="push('search')"
+        >
+          <component :is="icons.Search" :size="15" class="shrink-0" />
+          <span class="truncate">搜索文字、语音、OCR…</span>
+        </button>
+        <button
+          type="button"
+          class="jot-filter-btn shadow-card"
+          :class="{ 'is-on': favOnly || Boolean(activeTag) }"
+          aria-label="筛选"
+          @click="filterOpen = true"
+        >
+          <component :is="icons.ListFilter" :size="16" />
+        </button>
       </div>
-    </section>
+
+      <!-- 置顶：横滑条，卡片与时间线同尺寸；超出可视区且 >2 张时给左右箭头 -->
+      <section v-if="pinned.length" class="jot-pin-block">
+        <div class="jot-date-sep"><span class="jot-date-sep-label">置顶</span></div>
+        <div class="jot-shelf-wrap">
+          <button
+            v-if="shelfEdge.left"
+            type="button"
+            class="jot-shelf-nav is-left"
+            aria-label="向左查看更多置顶"
+            @click="scrollShelf(-1)"
+          >
+            <component :is="icons.ChevronLeft" :size="15" />
+          </button>
+          <div ref="shelf" class="jot-shelf" :style="{ '--shelf-item-w': shelfItemW }" @scroll.passive="syncShelfEdge">
+            <div v-for="n in pinned" :key="n.id" class="jot-shelf-item">
+              <NoteCard :note="n" :tag-colors="tagColorMap" :show-day="false" @open="open(n)" />
+            </div>
+          </div>
+          <button
+            v-if="shelfEdge.right"
+            type="button"
+            class="jot-shelf-nav is-right"
+            aria-label="向右查看更多置顶"
+            @click="scrollShelf(1)"
+          >
+            <component :is="icons.ChevronRight" :size="15" />
+          </button>
+        </div>
+      </section>
 
     <!-- 时间线（按天分组 + 响应式 N 列瀑布流，日期分隔） -->
     <section v-for="(g, gi) in grouped" :key="g.label + gi">
@@ -145,6 +165,12 @@ const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
       title="还没有笔记"
       hint="点下方入口，打开即记、拍完即存、说完出字"
     />
+    <Empty
+      v-else-if="!pinned.length && !visibleFlow.length"
+      :icon="favOnly ? 'Star' : 'SearchX'"
+      :title="favOnly ? '还没有收藏的笔记' : '没有匹配的笔记'"
+      :hint="favOnly ? '进笔记详情点星标即可收藏' : '换个标签试试'"
+    />
     </div>
 
     <!-- 四入口：通栏方块工具条（jot-bar* 语义类，不赌宿主构建）。
@@ -154,15 +180,25 @@ const pinnedCols = computed(() => splitCols(pinned.value, colCount.value))
         <button
           v-for="q in QUICK" :key="q.kind" type="button"
           class="jot-bar-item"
-          :class="'main' in q && q.main ? 'jot-bar-item-main' : ''"
+          :class="`jot-bar-item-${q.kind}`"
           @click="emit('create', q.kind)"
         >
           <span class="jot-bar-tile">
-            <component :is="icons[q.icon]" :size="19" :stroke-width="1.8" />
+            <component :is="icons[q.icon]" :size="22" :stroke-width="1.9" />
           </span>
           <span class="jot-bar-label">{{ q.label }}</span>
         </button>
       </div>
     </footer>
+
+    <!-- 筛选弹层（应用内 absolute，覆盖底部工具条而不沉到宿主 dock 下） -->
+    <FilterSheet
+      v-if="filterOpen"
+      :tags="tags"
+      :active-tag="activeTag"
+      :fav-only="favOnly"
+      @change="applyFilter"
+      @close="filterOpen = false"
+    />
   </div>
 </template>

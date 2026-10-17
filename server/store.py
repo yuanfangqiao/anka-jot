@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS notes(
   id TEXT PRIMARY KEY, title TEXT DEFAULT '', text TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', source TEXT DEFAULT 'text',
   createdAt REAL, updatedAt REAL, pinned INTEGER DEFAULT 0,
+  fav INTEGER DEFAULT 0,
   color TEXT, location TEXT, deleted INTEGER DEFAULT 0, rev INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updatedAt DESC);
 CREATE TABLE IF NOT EXISTS atts(
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 """
 
 NOTE_COLS = ('id', 'title', 'text', 'tags', 'source', 'createdAt', 'updatedAt',
-             'pinned', 'color', 'location', 'deleted', 'rev')
+             'pinned', 'fav', 'color', 'location', 'deleted', 'rev')
 ATT_COLS = ('id', 'noteId', 'kind', 'serverPath', 'thumbPath', 'width', 'height',
             'duration', 'peaks', 'ocrText', 'transcript', 'sha256', 'size', 'createdAt')
 JSON_FIELDS = {'tags', 'location', 'peaks', 'transcript'}
@@ -45,7 +46,7 @@ def _row_to_dict(row, cols):
                 d[f] = json.loads(d[f])
             except Exception:
                 d[f] = None
-    for b in ('pinned', 'deleted'):
+    for b in ('pinned', 'fav', 'deleted'):
         if b in d:
             d[b] = bool(d[b])
     return d
@@ -60,6 +61,8 @@ class Store:
             # v1.1 旧库补列：CREATE IF NOT EXISTS 不会给已存在的表加列
             if 'size' not in {r[1] for r in c.execute('PRAGMA table_info(atts)')}:
                 c.execute('ALTER TABLE atts ADD COLUMN size INTEGER')
+            if 'fav' not in {r[1] for r in c.execute('PRAGMA table_info(notes)')}:
+                c.execute('ALTER TABLE notes ADD COLUMN fav INTEGER DEFAULT 0')
 
     def _c(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -106,6 +109,7 @@ class Store:
                 for f in JSON_FIELDS & vals.keys():
                     vals[f] = json.dumps(vals[f], ensure_ascii=False)
                 vals['pinned'] = 1 if note.get('pinned') else 0
+                vals['fav'] = 1 if note.get('fav') else 0
                 vals['deleted'] = 1 if note.get('deleted') else 0
                 cols = ','.join(NOTE_COLS)
                 marks = ','.join('?' * 1 for _ in NOTE_COLS)

@@ -53,11 +53,11 @@ function next() { const d = new Date(year.value, month.value + 1, 1); year.value
           <component :is="icons.ChevronRight" :size="17" />
         </button>
       </div>
-      <div class="grid grid-cols-7 gap-1 text-center jot-fs-105 text-ink-2">
+      <div class="jot-cal-grid jot-fs-105 text-ink-2">
         <span v-for="w in ['一','二','三','四','五','六','日']" :key="w">{{ w }}</span>
       </div>
-      <div class="mt-1 grid grid-cols-7 gap-1">
-        <span v-for="(c, i) in cells" :key="i" class="aspect-square">
+      <div class="jot-cal-grid mt-1">
+        <span v-for="(c, i) in cells" :key="i" class="jot-cal-cell">
           <button
             v-if="c" type="button"
             class="flex h-full w-full cursor-pointer flex-col items-center justify-center rounded-xl jot-fs-13 transition-colors"

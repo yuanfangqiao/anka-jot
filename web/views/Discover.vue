@@ -62,7 +62,7 @@ const recentTags = computed(() => [...tags.value].sort((a, b) => b.lastUsedAt - 
     <!-- 智能相册 -->
     <section>
       <p class="mb-2 px-1 jot-fs-12 font-semibold text-ink-1">智能相册</p>
-      <div v-if="albums.length" class="grid grid-cols-2 gap-2.5">
+      <div v-if="albums.length" class="jot-grid-2">
         <button
           v-for="a in albums" :key="a.key" type="button"
           class="cursor-pointer rounded-card bg-bg-1 p-3.5 text-left shadow-card transition-transform duration-micro active:scale-95"

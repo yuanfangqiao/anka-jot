@@ -19,7 +19,7 @@ const ITEMS = [
   <Teleport to="body">
     <div class="fixed inset-0 z-50 flex items-end justify-center bg-black/45 jot-overlay-blur" @click="emit('close')">
       <div class="w-full max-w-md animate-fade-up p-4 jot-safe-bottom" @click.stop>
-        <div class="grid grid-cols-4 gap-2 rounded-shell bg-bg-1 p-3 shadow-card">
+        <div class="jot-grid-4 rounded-shell bg-bg-1 p-3 shadow-card">
           <button
             v-for="it in ITEMS" :key="it.kind" type="button"
             class="flex cursor-pointer flex-col items-center gap-1.5 rounded-2xl p-3 transition-colors hover:bg-glass active:bg-glass"
