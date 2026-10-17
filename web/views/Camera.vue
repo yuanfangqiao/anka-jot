@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /** Camera — 屏③：实时取景、连拍、闪光灯/切换相机、扫描模式（参考框 + 拍后 OCR）。
  *  拍完即存：每张快门立即落 IndexedDB（杀进程不丢），完成时统一挂进笔记。 */
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useUi, type JotAtt, type JotNote } from '../host'
 import { pop } from '../lib/nav'
-import { attachImage, newNote, saveDebounced } from '../state/store'
+import { attachImage, newNote, saveDebounced, settings } from '../state/store'
 import { blobUrl } from '../lib/db'
 
 const props = defineProps<{ noteId?: string }>()
@@ -16,9 +16,10 @@ const error = ref('')
 const facing = ref<'environment' | 'user'>('environment')
 const torch = ref(false)
 const scanMode = ref(false)
-/** 镜像预览：默认开（自拍视角更自然）；扫描模式强制关（OCR 需正向文字） */
-const mirrored = ref(true)
-watch(scanMode, v => { if (v) mirrored.value = false })
+/** 镜像：只跟镜头走 —— 前置（user）翻转成自拍镜面，后置（environment）保持原样；
+ *  扫描模式强制关（OCR 需正向文字），设置里可整体关掉自拍镜像 */
+const mirrored = computed(() =>
+  settings.selfieMirror && facing.value === 'user' && !scanMode.value)
 
 /** 移动端可走系统原生拍摄（<input capture>）：无网页授权、画质更好。
  *  真机判定：移动 UA 且无桌面插件——桌面 Chrome 设备模拟会伪造 UA，但 plugins
@@ -159,17 +160,11 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
           title="改用系统相机拍摄（免网页授权）"
           @click="useNative"
         >原生拍摄</button>
-        <button
-          type="button"
-          class="cursor-pointer rounded-full p-2 backdrop-blur transition-colors"
-          :class="mirrored ? 'bg-brand text-white' : 'bg-white/15'"
-          :title="mirrored ? '镜像开：预览与成片左右翻转' : '镜像关'"
-          @click="mirrored = !mirrored"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2v20" /><path d="m8 7-5 5 5 5" /><path d="m16 7 5 5-5 5" />
-          </svg>
-        </button>
+        <span
+          v-if="mirrored"
+          class="flex items-center rounded-full bg-brand px-2.5 py-1.5 jot-fs-11 text-white backdrop-blur"
+          title="前置自拍：预览与成片按镜子左右翻转"
+        >镜像</span>
         <button type="button" class="cursor-pointer rounded-full bg-white/15 p-2 backdrop-blur" @click="toggleTorch">
           <component :is="torch ? icons.Zap : icons.ZapOff" :size="18" />
         </button>

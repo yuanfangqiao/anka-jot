@@ -20,6 +20,10 @@ async function toggleLocation() {
   settings.locationOn = !settings.locationOn
   await kvSet('locationOn', settings.locationOn)
 }
+async function toggleSelfieMirror() {
+  settings.selfieMirror = !settings.selfieMirror
+  await kvSet('selfieMirror', settings.selfieMirror)
+}
 async function setLang(e: Event) {
   settings.lang = (e.target as HTMLSelectElement).value
   await kvSet('lang', settings.lang)
@@ -58,6 +62,19 @@ async function exportJson() {
           @click="toggleLocation"
         >
           <span class="block h-6 w-6 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': settings.locationOn }" />
+        </button>
+      </div>
+      <div class="flex items-center justify-between py-1.5">
+        <div>
+          <p class="jot-fs-14 text-ink-0">自拍镜像</p>
+          <p class="jot-fs-115 text-ink-2">前置摄像头成片左右翻转，后置保持原样</p>
+        </div>
+        <button
+          type="button" class="h-7 w-12 cursor-pointer rounded-full p-0.5 transition-colors"
+          :class="settings.selfieMirror ? 'bg-brand' : 'bg-bg-2'"
+          @click="toggleSelfieMirror"
+        >
+          <span class="block h-6 w-6 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': settings.selfieMirror }" />
         </button>
       </div>
       <div class="flex items-center justify-between py-1.5">

@@ -18,6 +18,8 @@ export const ready = ref(false)
 export const settings = reactive({
   locationOn: true,
   lang: 'zh-CN',
+  /** 前置（自拍）成片左右翻转；后置始终不镜像 */
+  selfieMirror: true,
 })
 
 export const sortedNotes = computed(() =>
@@ -33,6 +35,7 @@ export async function initStore() {
   for (const n of ns) index.upsert(n, n.atts ?? [])
   settings.locationOn = (await db.kvGet<boolean>('locationOn')) ?? true
   settings.lang = (await db.kvGet<string>('lang')) ?? 'zh-CN'
+  settings.selfieMirror = (await db.kvGet<boolean>('selfieMirror')) ?? true
   await refreshPending()
   onSyncChanged(reload)
   ready.value = true
