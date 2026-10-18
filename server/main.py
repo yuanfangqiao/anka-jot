@@ -8,6 +8,7 @@ import importlib.util
 import logging
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from app.cordis import Service
@@ -42,6 +43,31 @@ MAX_ATTS_PER_NOTE = 50
 MAX_TEXT_LEN = 200_000
 MAX_TITLE_LEN = 200
 MAX_TAGS = 50
+MAX_TODOS = 200
+MAX_TODO_TEXT = 500
+
+# 日历：一次最多一年多的边界数组；单日跨度容忍夏令时（23/25 小时）
+CAL_MAX_DAYS = 370
+CAL_MAX_SPAN_MS = 400 * 86_400_000
+CAL_MAX_DAY_MS = 36 * 3_600_000
+
+
+def _valid_day_starts(day_starts) -> list[int]:
+    """客户端给的本地日边界：必须是严格递增的毫秒整数列表。"""
+    if not isinstance(day_starts, list) or len(day_starts) < 2:
+        raise ValueError('dayStarts 非法')
+    if len(day_starts) > CAL_MAX_DAYS:
+        raise ValueError('dayStarts 过长')
+    out: list[int] = []
+    for v in day_starts:
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise ValueError('dayStarts 非法')
+        out.append(int(v))
+    if any(b <= a for a, b in zip(out, out[1:])):
+        raise ValueError('dayStarts 必须严格递增')
+    if out[-1] - out[0] > CAL_MAX_SPAN_MS:
+        raise ValueError('时间跨度超限')
+    return out
 
 
 def _valid_note(note: dict) -> dict:
@@ -59,6 +85,32 @@ def _valid_note(note: dict) -> dict:
     rev = note.get('rev')
     if rev is not None and (not isinstance(rev, (int, float)) or isinstance(rev, bool) or rev < 0):
         raise ValueError('note.rev 非法')
+    todo = note.get('todo')
+    if todo is not None and not isinstance(todo, bool):
+        raise ValueError('note.todo 非法')
+    todos = note.get('todos')
+    if todos is not None:
+        if not isinstance(todos, list):
+            raise ValueError('note.todos 非法')
+        if len(todos) > MAX_TODOS:
+            raise ValueError(f'事项超限（最多 {MAX_TODOS} 条）')
+        clean = []
+        for t in todos:
+            if not isinstance(t, dict):
+                raise ValueError('事项非法')
+            txt = t.get('text')
+            if not isinstance(txt, str):
+                raise ValueError('事项非法')
+            txt = txt.strip()
+            if not txt:
+                continue  # 行内编辑清空到失焦之间的瞬态空行：落库时丢弃，不报错
+            if len(txt) > MAX_TODO_TEXT:
+                raise ValueError('事项文本超长')
+            tid = t.get('id')
+            if not isinstance(tid, str) or not tid.strip():
+                tid = uuid.uuid4().hex  # 旧客户端未带 id：补齐，便于多端列表稳定
+            clean.append({'id': tid.strip()[:80], 'text': txt, 'done': bool(t.get('done'))})
+        note['todos'] = clean
     note.setdefault('tags', [])
     return note
 
@@ -73,6 +125,24 @@ class Jot(Service):
     # ─── 快照（/state 也用它） ──────────────────────
     def snapshot(self, sinceRev: int = 0, limit: int = 500):
         return self.store.snapshot(int(sinceRev or 0), min(int(limit or 500), 1000))
+
+    # ─── 日历（远端数据源：整月计数 + 按天分页） ──────
+    def calendar_counts(self, dayStarts: list, knownRev: int = 0):
+        """dayStarts 为客户端算好的 N+1 个本地零点毫秒（服务端不做时区推断，
+        避免夏令时月按固定 offset 切天出错）。knownRev 命中则只回版本号。"""
+        starts = _valid_day_starts(dayStarts)
+        r = self.store.calendar_counts(starts)
+        if knownRev and int(knownRev) == r['rev']:
+            return {'days': [], 'rev': r['rev'], 'unchanged': True}
+        return {**r, 'unchanged': False}
+
+    def notes_by_day(self, startMs, endMs, cursor=None, limit: int = 20):
+        lo, hi = float(startMs), float(endMs)
+        if hi <= lo:
+            raise ValueError('时间范围非法')
+        if hi - lo > CAL_MAX_DAY_MS:
+            raise ValueError('单日跨度超限')
+        return self.store.notes_by_day(lo, hi, cursor, int(20 if limit is None else limit))
 
     # ─── 笔记 ───────────────────────────────────────
     def upsert_note(self, note: dict, atts: list | None = None,

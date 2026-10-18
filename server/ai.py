@@ -70,6 +70,10 @@ def ocr_image(ctx, fp: Path) -> dict:
 
 def _gather_text(note: dict) -> str:
     parts = [f"# {note.get('title') or '未命名'}", note.get('text') or '']
+    todos = [t for t in (note.get('todos') or []) if isinstance(t, dict) and t.get('text')]
+    if todos:
+        parts.append('[待办]\n' + '\n'.join(
+            f"- [{'x' if t.get('done') else ' '}] {t['text']}" for t in todos))
     for a in note.get('atts') or []:
         if a.get('ocrText'):
             parts.append(f"[图片OCR]\n{a['ocrText']}")

@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /** Todo — 顶部「待办」视图：不另写卡片，直接复用首页 NoteCard 与瀑布流。
- *  只筛出「正文里带 - [ ] 行」的笔记：还有没勾完的排上面，全部勾完的收进折叠区。
+ *  只筛出「打了待办标志」的笔记（与事项列表无关）：还有没勾完的排上面，全部勾完的收进折叠区。
  *  数据来自 store（本地事实源，同步在后台已完成），改勾选仍进详情操作。 */
 import { computed, ref } from 'vue'
 import { useUi, type JotNote } from '../host'
 import { notes, tags } from '../state/store'
-import { splitTodoText } from '../lib/todos'
 import { push } from '../lib/nav'
 import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
@@ -14,19 +13,22 @@ import { useColCount, splitCols } from '../lib/useColCount'
 const icons = useUi().icons
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
 
-/** 有待办的笔记：清单解析复用 lib/todos，只用来分组与计数（卡面自己也会解析） */
+/** 只看待办标志；事项只用于分组与计数（卡面自己读 note.todos） */
 const todoNotes = computed(() =>
   notes.value
-    .filter(n => !n.deleted)
-    .map(n => ({ note: n, todos: splitTodoText(n.text || '').todos }))
-    .filter(x => x.todos.length > 0)
+    .filter(n => !n.deleted && n.todo)
+    .map(n => ({ note: n, todos: n.todos ?? [] }))
     .sort((a, b) => b.note.createdAt - a.note.createdAt))
 
-/** 还有未勾选项的笔记 → 卡片墙；全部勾完的笔记 → 折叠区 */
+/** 还有未勾选项（或还没填事项）的笔记 → 卡片墙；全部勾完的笔记 → 折叠区 */
 const pendingNotes = computed(() =>
-  todoNotes.value.filter(x => x.todos.some(t => !t.done)).map(x => x.note))
+  todoNotes.value
+    .filter(x => !x.todos.length || x.todos.some(t => !t.done))
+    .map(x => x.note))
 const doneNotes = computed(() =>
-  todoNotes.value.filter(x => x.todos.every(t => t.done)).map(x => x.note))
+  todoNotes.value
+    .filter(x => x.todos.length > 0 && x.todos.every(t => t.done))
+    .map(x => x.note))
 
 /** 头部进度按「待办项」计（一张卡可能有好几条） */
 const allItems = computed(() => todoNotes.value.flatMap(x => x.todos))
@@ -70,7 +72,7 @@ function open(n: JotNote) { push('note', { id: n.id }) }
         v-if="!pendingNotes.length"
         icon="ListChecks"
         :title="doneNotes.length ? '待办都完成了' : '没有待办'"
-        hint="在正文里写 - [ ] 事项，笔记就会出现在这里"
+        hint="在笔记详情点亮「待办」开关，笔记就会出现在这里"
       />
 
       <section v-if="doneNotes.length" class="mt-4">

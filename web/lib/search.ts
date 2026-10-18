@@ -1,17 +1,19 @@
 /** search.ts — 客户端全文索引：中文 bigram + 英文按词，权重排序。
  *  千条笔记内存占用约 2-3MB；文档变更增量更新。 */
 import type { JotAtt, JotNote } from '../host'
+import { todoText } from './todos'
 
 export interface Hit {
   noteId: string; title: string; updatedAt: number
-  field: 'title' | 'text' | 'ocr' | 'transcript'
+  field: 'title' | 'text' | 'ocr' | 'transcript' | 'todo'
   snippet: string; score: number
 }
 
-interface Doc { id: string; updatedAt: number; fields: [string, string, string, string] }
+interface Doc { id: string; updatedAt: number; fields: [string, string, string, string, string] }
 
-const WEIGHT = [3, 2, 1, 1] // title > text > ocr > transcript
-const FIELD_NAME = ['title', 'text', 'ocr', 'transcript'] as const
+const WEIGHT = [3, 2, 1, 1, 1] // title > text > ocr/transcript/todo
+const FIELD_NAME = ['title', 'text', 'ocr', 'transcript', 'todo'] as const
+const FIELD_COUNT = FIELD_NAME.length
 
 export class SearchIndex {
   private docs = new Map<string, Doc>()
@@ -39,7 +41,7 @@ export class SearchIndex {
     const tr = atts.flatMap(a => (a.transcript ?? []).map(s => s.text)).join('\n')
     const doc: Doc = {
       id: note.id, updatedAt: note.updatedAt,
-      fields: [note.title ?? '', note.text ?? '', ocr, tr],
+      fields: [note.title ?? '', note.text ?? '', ocr, tr, todoText(note.todos)],
     }
     this.docs.set(note.id, doc)
     const terms = new Set<string>()
@@ -67,7 +69,7 @@ export class SearchIndex {
       for (const id of ids) {
         const doc = this.docs.get(id)!
         // 找到该 term 命中的最高权重字段
-        for (let fi = 0; fi < 4; fi++) {
+        for (let fi = 0; fi < FIELD_COUNT; fi++) {
           if (doc.fields[fi].toLowerCase().includes(t) || doc.fields[fi].includes(t)) {
             const cur = score.get(id)
             const s = WEIGHT[fi] * (t.length > 1 ? 2 : 1)

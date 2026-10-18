@@ -340,7 +340,25 @@ html[data-theme='dark'] .jot-textcard {
 }
 .jot-card-time { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .jot-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jot-fav-mini { color: #d9a441; }
+.jot-fav-mini { flex: 0 0 auto; color: var(--warn, #d99a2b); }
+/* 待办标志：卡片脚注的小图标，与收藏星并列；琥珀色与顶栏待办标志（实心琥珀胶囊）一致 */
+.jot-todo-mini {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--warn, #d99a2b);
+}
+/* 待办卡还没有事项：占住剩余空间，低调提示而不是留白 */
+.jot-comp-todos-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 12px;
+  font-size: 11px;
+  color: var(--text-2, #a39e90);
+}
 /* 待办进度：与时间同排的小胶囊，全部完成时转绿，卡片上一眼可读 */
 .jot-card-todo {
   flex: 0 0 auto;

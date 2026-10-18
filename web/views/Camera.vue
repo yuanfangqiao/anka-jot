@@ -21,15 +21,17 @@ const scanMode = ref(false)
 const mirrored = computed(() =>
   settings.selfieMirror && facing.value === 'user' && !scanMode.value)
 
-/** 移动端可走系统原生拍摄（<input capture>）：无网页授权、画质更好。
- *  真机判定：移动 UA 且无桌面插件——桌面 Chrome 设备模拟会伪造 UA，但 plugins
- *  仍是桌面那套（PDF 等 >0 个），借此区分「真机」与「模拟器」，
- *  避免开发态在桌面误入原生模式弹出文件选择器 */
-function likelyRealMobile(): boolean {
-  if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) return false
-  return (navigator.plugins?.length ?? 0) === 0
+/** 移动端走系统原生拍摄（<input capture>）：不进网页取景，因此不申请摄像头权限，
+ *  也就不会出现「PWA 已授权过、再次打开又反复授权」。
+ *  只按 UA 判定真机：曾用 navigator.plugins 排除桌面模拟器，但 iOS/Android Chrome
+ *  真机的 plugins 也可能非空，会被误判成桌面 → 自动 getUserMedia → 每次打开重弹授权。 */
+function isMobileDevice(): boolean {
+  const ua = navigator.userAgent
+  if (/iPhone|iPad|iPod|Android/i.test(ua)) return true
+  // iPadOS 13+ 默认桌面 UA：Mac + 多点触控
+  return /Macintosh/i.test(ua) && (navigator.maxTouchPoints ?? 0) > 1
 }
-const nativeMode = ref(likelyRealMobile())
+const nativeMode = ref(isMobileDevice())
 const fileInput = ref<HTMLInputElement>()
 const shots = ref<JotAtt[]>([])
 const shotThumbs = ref<string[]>([])
@@ -51,7 +53,7 @@ async function openCamera() {
     if (video.value) { video.value.srcObject = stream; await video.value.play() }
   } catch (e: any) {
     // 真机取景失败（未授权/无摄像头）→ 自动降级原生拍摄；桌面仅提示
-    if (likelyRealMobile()) { nativeMode.value = true; return }
+    if (isMobileDevice()) { nativeMode.value = true; return }
     error.value = '无法打开相机：' + (e?.message ?? '权限被拒绝') + '。可改用相册导入。'
   }
 }
@@ -137,8 +139,7 @@ function useNative() {
 function useLive() { nativeMode.value = false; error.value = ''; void openCamera() }
 
 onMounted(() => {
-  // 默认实时取景；真机上想免重复授权可切「原生拍摄」。
-  // 注意：Chrome 设备模拟会伪造移动端 UA，故不用 UA 自动判定模式，仅作为初始默认值
+  // 真机默认系统相机（不申请网页摄像头权限）；桌面才进实时取景
   if (!nativeMode.value) void openCamera()
 })
 onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
@@ -159,7 +160,7 @@ onUnmounted(() => { stream?.getTracks().forEach(t => t.stop()); stream = null })
       >{{ scanMode ? '扫描模式' : '拍照模式' }}</button>
       <div v-if="!nativeMode" class="flex gap-2">
         <button
-          v-if="likelyRealMobile()"
+          v-if="isMobileDevice()"
           type="button"
           class="cursor-pointer rounded-full bg-white/15 px-3 py-1.5 jot-fs-12 backdrop-blur"
           title="改用系统相机拍摄（免网页授权）"

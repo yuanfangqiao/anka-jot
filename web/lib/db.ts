@@ -77,13 +77,23 @@ export async function getNote(id: string): Promise<JotNote | null> {
   const d = await open()
   return (await req<JotNote | undefined>(d.transaction(T.notes).objectStore(T.notes).get(id))) ?? null
 }
-/** 写笔记 + 附件元数据 + outbox 追加，同一事务（离线队列原子性） */
-export async function saveNote(note: JotNote, queueSync = true) {
+/** 批量写笔记 + outbox 追加，同一事务（迁移/整表修复用，避免逐条事务放大） */
+export async function saveNotes(list: JotNote[], queueSync = true) {
+  if (!list.length) return
   const d = await open()
   const t = await tx(d, [T.notes, T.outbox], 'readwrite')
-  t.objectStore(T.notes).put(plain(note))
-  if (queueSync) t.objectStore(T.outbox).add({ type: 'note.upsert', noteId: note.id, createdAt: Date.now() })
+  const store = t.objectStore(T.notes)
+  const outbox = t.objectStore(T.outbox)
+  const at = Date.now()
+  for (const note of list) {
+    store.put(plain(note))
+    if (queueSync) outbox.add({ type: 'note.upsert', noteId: note.id, createdAt: at })
+  }
   await done(t)
+}
+/** 写笔记 + 附件元数据 + outbox 追加，同一事务（离线队列原子性） */
+export async function saveNote(note: JotNote, queueSync = true) {
+  await saveNotes([note], queueSync)
 }
 export async function tombstone(id: string) {
   const d = await open()

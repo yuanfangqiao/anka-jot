@@ -5,7 +5,7 @@
 import { reactive } from 'vue'
 import { callJot, type JotAtt, type JotNote } from '../host'
 import * as db from './db'
-import { blobToB64 } from './image'
+import { blobToB64, sha256Hex } from './image'
 import { prewarmThumbs } from './media'
 import { refreshMedia } from './useMedia'
 import { ensureLocalThumbnail } from './thumbnails'
@@ -39,19 +39,28 @@ function normMime(att: JotAtt, blob: Blob): string {
   return att.kind === 'image' ? 'image/jpeg' : att.kind === 'video' ? 'video/mp4' : 'audio/mp4'
 }
 
+/** 上传单个附件。本地 blob 缺失或 0 字节（录音被中断、iOS 音频会话没采到数据）
+ *  已无法恢复，服务端又只接受 size>0：直接丢掉这条附件元数据，
+ *  否则整条笔记的 outbox 会每次同步都 400「文件大小非法」并永久卡住。 */
 async function uploadAtt(att: JotAtt): Promise<boolean> {
-  if (att.serverPath) return true
+  if (att.serverPath) return false
   const blob = await db.getBlob(att.id)
-  if (!blob || !att.sha256) return false
+  if (!blob?.size) {
+    console.warn('[jot] 丢弃损坏的本地附件（无数据）:', att.id, att.kind, blob?.size ?? 'missing')
+    await db.delAtt(att.id)
+    return true
+  }
+  // 旧数据可能没存 sha256：有数据就现算，别当成坏附件丢掉
+  const sha256 = att.sha256 || await sha256Hex(blob)
   const thumb = att.kind === 'audio' ? null : await ensureLocalThumbnail(att)
   const thumbB64 = thumb ? await blobToB64(thumb) : undefined
   const begin = await callJot('upload_begin', {
     attId: att.id, kind: att.kind, mime: normMime(att, blob),
-    size: blob.size, sha256: att.sha256, thumbB64,
+    size: blob.size, sha256, thumbB64,
   })
   if (begin?.exists) {
     await db.putAtt({ ...att, serverPath: begin.path, thumbPath: begin.thumbPath ?? att.thumbPath })
-    return true
+    return false
   }
   const b64 = await blobToB64(blob)
   const per = Math.ceil(CHUNK * 4 / 3) // 每块 base64 字符数
@@ -63,7 +72,7 @@ async function uploadAtt(att: JotAtt): Promise<boolean> {
     attId: att.id, thumbB64,
   })
   await db.putAtt({ ...att, serverPath: r.path, thumbPath: r.thumbPath ?? null })
-  return true
+  return false
 }
 
 // ─── 推送 ──────────────────────────────────────────
@@ -106,12 +115,19 @@ async function drainOutbox(): Promise<void> {
           const note = await db.getNote(it.noteId)
           if (!note) { await db.outboxDrop(it.seq!); changed = true; dirty.add(it.noteId); continue }
           const atts = await db.attsOf(note.id)
+          let dropped = false
           for (const a of atts) {
-            if (!a.serverPath) {
-              // 媒体缺失（本地 blob/sha256 缺失）视为硬失败：不能把缺媒体的笔记同步上去
-              const ok = await uploadAtt(a)
-              if (!ok) throw new Error(`媒体上传失败：${a.id}`)
-            }
+            // 缺媒体的坏附件在 uploadAtt 内自愈丢弃；网络错误则抛出，交给下面的探活分支
+            if (!a.serverPath && await uploadAtt(a)) dropped = true
+          }
+          // 坏附件是这条笔记的唯一内容（空语音壳）：整条归档，不把空笔记推上服务端
+          if (dropped && !(await db.attsOf(note.id)).length
+              && !(note.text || '').trim() && !(note.title || '').trim() && !note.todos?.length) {
+            await db.tombstone(note.id)
+            await db.outboxDrop(it.seq!)
+            changed = true
+            dirty.add(note.id)
+            continue
           }
           const fresh = await db.attsOf(note.id)
           const r = await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })

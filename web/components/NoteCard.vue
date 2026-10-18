@@ -1,11 +1,10 @@
 <script setup lang="ts">
-/** NoteCard — 时间线卡片：按内容分五类，尺寸固定、内容即类型。
+/** NoteCard — 时间线卡片：六类卡型，尺寸固定、内容即类型。
  *  文字卡 = 哈希取色语录卡（1:1 方卡，无标题时正文即标题）；
- *  待办笔记 = 走 3:4 复合卡，但只显示 标题 → 正文 → 待办清单；
- *             图、视频、语音等附件全部让位，卡面不出现任何附件位；
+ *  待办卡 = 由 note.todo 标志决定：3:4，只显示 标题 → 正文 → 事项清单，附件一律让位；
  *  图片卡 = 满幅封面（3:4，点图全屏预览）；视频卡 = 海报封面（3:4，▶ + 时长角标，点封面全屏播放）；
  *  纯语音卡 = 长条（原语音条形态不变，约 76px，点语音条播放、点其余处进编辑）；
- *  复合卡 = 3:4 与图片卡同尺寸：标题 → 正文 → 媒体（图 / 视频海报 / 语音条）。
+ *  复合卡 = 3:4 与图片卡同尺寸：标题 → 正文 → 事项清单 / 媒体（有清单时清单占位、媒体不上卡）。
  *  底部统一 CardFoot：左时间，右「⋯」（菜单由 App 级 CardMenu 承载）。 */
 import { computed, ref } from 'vue'
 import { toast, useUi, type JotAtt, type JotNote } from '../host'
@@ -18,7 +17,7 @@ import { useAudioPlayer } from '../lib/useAudioPlayer'
 import ImgViewer from './ImgViewer.vue'
 import VideoViewer from './VideoViewer.vue'
 import { askConfirm } from '../state/confirm'
-import { splitTodoText } from '../lib/todos'
+import { todoStat as computeTodoStat } from '../lib/todos'
 import { togglePin } from '../state/store'
 
 const props = withDefaults(defineProps<{
@@ -28,11 +27,13 @@ const props = withDefaults(defineProps<{
   showDay?: boolean
   /** 日历时间轴已显示时刻，卡内隐藏时间避免重复 */
   showTime?: boolean
-}>(), { showDay: true, showTime: true })
+  /** 只读卡（日历远端列表）：隐藏置顶角标与「⋯」菜单，避免对卡片投影做写入 */
+  readonly?: boolean
+}>(), { showDay: true, showTime: true, readonly: false })
 const emit = defineEmits<{ open: [] }>()
 const icons = useUi().icons
 
-type CardType = 'text' | 'image' | 'voice' | 'video' | 'composite'
+type CardType = 'text' | 'image' | 'voice' | 'video' | 'todo' | 'composite'
 
 const imageAtts = computed<JotAtt[]>(() => props.note.atts?.filter(a => a.kind === 'image') ?? [])
 const audioAtt = computed<JotAtt | null>(() => props.note.atts?.find(a => a.kind === 'audio') ?? null)
@@ -48,30 +49,30 @@ const vidBadge = computed(() => {
   return parts.join(' · ')
 })
 
-/** 正文与待办拆开：预览不露原始 - [ ] 标记，待办按「正文之后、媒体之前」单列 */
-const parsed = computed(() => splitTodoText(props.note.text || ''))
-const todos = computed(() => parsed.value.todos)
+/** 事项来自独立字段，正文不再夹带 - [ ] 行 */
+const todos = computed(() => props.note.todos ?? [])
 const todosDone = computed(() => todos.value.filter(t => t.done).length)
-const todoStat = computed(() => (todos.value.length
-  ? { done: todosDone.value, total: todos.value.length }
+const stat = computed(() => computeTodoStat(todos.value))
+const todoStat = computed(() => (stat.value.total
+  ? { done: stat.value.done, total: stat.value.total }
   : null))
-const todoPct = computed(() => (todos.value.length ? Math.round(todosDone.value / todos.value.length * 100) : 0))
+const todoPct = computed(() => stat.value.pct)
 /** 卡面最多放五行，余下的用「还有 n 条」收口 */
 const cardTodos = computed(() => todos.value.slice(0, 5))
-/** 正文（剥 markdown 标记，不含待办行） */
-const text = computed(() => parsed.value.body.replace(/^#+\s*/gm, '').trim())
+/** 正文（剥 markdown 标记） */
+const text = computed(() => (props.note.text || '').replace(/^#+\s*/gm, '').trim())
 
-/** 是否算「有文字」：标题/待办也算，避免纯清单笔记被压成语音条 */
+/** 是否算「有文字」：标题/事项也算，避免纯清单笔记被压成语音条 */
 const hasText = computed(() =>
-  Boolean(props.note.title) || text.value.length > 0 || Boolean(todoStat.value))
+  Boolean(props.note.title) || text.value.length > 0 || todos.value.length > 0)
 
-/** 卡片类型：待办优先——有清单就升格为 3:4 卡且只露清单，图 / 视频 / 语音一概不参与卡面；
- *  无待办时纯语音仍是长条，「媒体 + 文字」或「图 + 语音」才是复合卡 */
+/** 卡片类型：待办标志优先（3:4 只露清单）；
+ *  无附件 → 文字卡；纯媒体 → 图片/视频/语音；其余（媒体 + 文字/事项、图音混合）→ 复合卡 */
 const cardType = computed<CardType>(() => {
+  if (props.note.todo) return 'todo'
   const hasImg = imageAtts.value.length > 0
   const hasAud = Boolean(audioAtt.value)
   const hasVid = Boolean(videoAtt.value)
-  if (todos.value.length) return 'composite'
   if (!hasImg && !hasAud && !hasVid) return 'text'
   if (hasAud && !hasImg && !hasVid && !hasText.value) return 'voice'
   if (hasVid && !hasImg && !hasAud && !hasText.value) return 'video'
@@ -79,9 +80,9 @@ const cardType = computed<CardType>(() => {
   return 'composite'
 })
 
-/** 标题：无标题时取正文首行，纯清单笔记取第一条待办 */
+/** 标题：无标题时取正文首行，纯清单笔记取第一条事项 */
 const title = computed(() =>
-  props.note.title || text.value.split('\n')[0] || parsed.value.todos[0]?.text || '')
+  props.note.title || text.value.split('\n')[0] || todos.value[0]?.text || '')
 const body = computed(() =>
   props.note.title ? text.value : text.value.split('\n').slice(1).join(' ').trim())
 
@@ -142,7 +143,7 @@ async function unpinByBadge() {
     @click="emit('open')"
   >
     <button
-      v-if="note.pinned" type="button" class="jot-card-pin"
+      v-if="note.pinned && !readonly" type="button" class="jot-card-pin"
       title="已置顶，点击取消" aria-label="取消置顶"
       @click.stop="unpinByBadge"
     >
@@ -165,7 +166,7 @@ async function unpinByBadge() {
       </span>
       <span class="jot-voicebar-dur">{{ fmtDur(audioAtt?.duration) }}</span>
     </div>
-    <CardFoot :note="note" :time="timeLabel" :title="note.title || ''" :todo="todoStat" />
+    <CardFoot :note="note" :time="timeLabel" :title="note.title || ''" :todo="todoStat" :readonly="readonly" />
   </article>
 
   <!-- 其余四类：固定比例卡 -->
@@ -177,7 +178,7 @@ async function unpinByBadge() {
   >
     <!-- 置顶角标：右上角统一位置，不参与文字流 -->
     <button
-      v-if="note.pinned" type="button" class="jot-card-pin"
+      v-if="note.pinned && !readonly" type="button" class="jot-card-pin"
       title="已置顶，点击取消" aria-label="取消置顶"
       @click.stop="unpinByBadge"
     >
@@ -188,7 +189,7 @@ async function unpinByBadge() {
     <div v-if="cardType === 'text'" class="jot-textcard" :style="tcStyle">
       <p class="jot-tc-quote">{{ title || '·' }}</p>
       <p v-if="body" class="jot-tc-sub">{{ body }}</p>
-      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" class="jot-tc-cardfoot" />
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" :readonly="readonly" class="jot-tc-cardfoot" />
     </div>
 
     <!-- 图片卡：满幅封面，点图预览 -->
@@ -197,7 +198,7 @@ async function unpinByBadge() {
         <MediaPreview :att="imageAtts[0]" />
         <span v-if="imageAtts.length > 1" class="jot-imgbadge">{{ imageAtts.length }}张</span>
       </div>
-      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" />
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" :readonly="readonly" />
     </template>
 
     <!-- 视频卡：海报封面 + 中央 ▶ + 左下时长角标，点封面全屏播放 -->
@@ -207,7 +208,7 @@ async function unpinByBadge() {
         <span class="jot-vid-play"><component :is="icons.Play" :size="18" /></span>
         <span v-if="vidBadge" class="jot-vid-dur">{{ vidBadge }}</span>
       </div>
-      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" />
+      <CardFoot :note="note" :time="timeLabel" :todo="todoStat" :readonly="readonly" />
     </template>
 
     <!-- 复合卡：标题 → 正文 → （有清单时只显示清单）→ 媒体，整卡 3:4 -->
@@ -217,10 +218,10 @@ async function unpinByBadge() {
         <p v-if="body" class="jot-clamp-2 jot-fs-11 mt-0.5 leading-relaxed text-ink-1">{{ body }}</p>
       </div>
 
-      <!-- 待办域：有清单就占满卡面剩余空间，图 / 视频 / 语音一概不显示 -->
+      <!-- 事项域：有清单就占满卡面剩余空间，图 / 视频 / 语音一概不显示 -->
       <div v-if="todos.length" class="jot-comp-todos">
         <div class="jot-comp-todos-head">
-          <span class="jot-comp-todos-title">待办</span>
+          <span class="jot-comp-todos-title">事项</span>
           <span class="jot-comp-todos-count">{{ todosDone }}/{{ todos.length }}</span>
           <span class="jot-comp-todos-bar"><i :style="{ width: todoPct + '%' }" /></span>
         </div>
@@ -235,6 +236,9 @@ async function unpinByBadge() {
           还有 {{ todos.length - cardTodos.length }} 条
         </div>
       </div>
+
+      <!-- 待办卡但还没填事项：给一句空态提示，避免卡面只剩标题 -->
+      <p v-else-if="cardType === 'todo'" class="jot-comp-todos-empty">还没有事项，点开添加</p>
 
       <div
         v-else
@@ -286,7 +290,7 @@ async function unpinByBadge() {
       </div>
 
       <!-- 待办已在卡面单列，脚下不再重复进度胶囊 -->
-      <CardFoot :note="note" :time="timeLabel" />
+      <CardFoot :note="note" :time="timeLabel" :readonly="readonly" />
     </template>
 
     <!-- 全屏图片预览 / 视频播放 -->

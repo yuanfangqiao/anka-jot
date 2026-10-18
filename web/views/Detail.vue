@@ -1,18 +1,18 @@
 <script setup lang="ts">
 /** Detail — 屏② 笔记详情：上半文字编辑（独占高度、自身滚动），
  *  下半附件横滑缩略（图/视频/语音统一 3:4 瓷贴），转写折叠；
- *  顶栏：置顶 / 收藏 / 待办清单（本地 `- [ ]` 行）/ 删除；
- *  正文下方：待办勾选与追加、OCR、AI 摘要 / AI 提取待办、标签。 */
+ *  顶栏：置顶 / 待办标志 / 收藏 / 删除；
+ *  正文下方：事项清单（独立字段 note.todos）、OCR、AI 摘要 / AI 提取待办、标签。 */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { callJot, mediaUrl, toast, useUi, type JotAtt, type JotNote, type Seg } from '../host'
+import { callJot, mediaUrl, toast, useUi, type JotAtt, type JotNote, type JotTodo, type Seg } from '../host'
 import { pop, push } from '../lib/nav'
 import { fmtTime } from '../lib/format'
 import {
   captureLocation, ensureTag, flushSave, newNote, removeNote,
-  saveDebounced, setActiveNote, tagColor, tags, toggleFav, togglePin, updateAtt,
+  saveDebounced, setActiveNote, tagColor, tags, toggleFav, togglePin, toggleTodoFlag, updateAtt,
 } from '../state/store'
 import { usePicker } from '../state/picker'
-import { composeTodoText, newTodo, splitTodoText, type TodoEntry } from '../lib/todos'
+import { newTodo, normalizeNoteTodos } from '../lib/todos'
 import * as db from '../lib/db'
 import MediaShelf from '../components/MediaShelf.vue'
 import TagChip from '../components/TagChip.vue'
@@ -20,6 +20,16 @@ import Empty from '../components/Empty.vue'
 
 const props = defineProps<{ id: string; fresh?: string }>()
 const icons = useUi().icons
+
+/** 顶栏三键的开态：不换形状、不加圆底——保留描边，只把图标内部灌金（`--warn`）。
+ *  描边同步加深到 `--text-0`，形成「深色边包金色心」的双色标志；未开仍是灰色细描边。
+ *  着色必须内联到 <button>（svg 用 currentColor 继承描边色），样式表类会被后注入的
+ *  `.jot-icon-btn { color }` 盖掉。 */
+const FLAG_FILL = 'var(--warn, #d99a2b)'
+const FLAG_EDGE = 'var(--text-0, #2b2925)'
+const flagStyle = (on?: boolean) => (on ? { color: FLAG_EDGE } : undefined)
+/** 填色走 style 而非 fill 属性：SVG 表现属性里的 var() 在部分内核不可靠 */
+const flagFillStyle = (on?: boolean) => (on ? { fill: FLAG_FILL } : undefined)
 
 const note = ref<JotNote | null>(null)
 const atts = ref<JotAtt[]>([])
@@ -43,14 +53,13 @@ onMounted(async () => {
   const n = await db.getNote(props.id)
   if (!alive) return // 已卸载：不写组件状态，避免重复 pop
   if (n) {
+    normalizeNoteTodos(n) // 兜底：初始化迁移之外，单条读取也保证结构完整
     note.value = n
-    hydrateTodos(n.text)
     atts.value = await db.attsOf(n.id)
   } else if (props.fresh) {
     note.value = newNote('text'); note.value.id = props.id
     // 位置写进本对象：空笔记的 persist 会被跳过，但用户一打字就随正文一起落库
     captureLocation(note.value)
-    hydrateTodos('')
   } else { pop(); return }
   setActiveNote(note.value)
   if (props.fresh) focusTimer = window.setTimeout(() => document.getElementById('jot-title')?.focus(), 60)
@@ -146,55 +155,39 @@ async function summarize() {
     aiResult.value = r?.ok ? r.markdown : (r?.message ?? 'AI 未配置')
   } catch { aiResult.value = 'AI 服务不可用' } finally { aiBusy.value = '' }
 }
-// ─── 待办域：结构化编辑，存储仍写回正文末尾的「- [ ]」行 ──
-const body = ref('')
-const todos = ref<TodoEntry[]>([])
+// ─── 事项域：note.todos 独立字段，勾选/增删直接改数组并防抖保存 ──
+const todos = computed<JotTodo[]>(() => note.value?.todos ?? [])
 const todoDraft = ref('')
 const showTodoInput = ref(false)
 const todoInput = ref<HTMLInputElement>()
 
 const todosDone = computed(() => todos.value.filter(t => t.done).length)
 const todoPct = computed(() => (todos.value.length ? Math.round(todosDone.value / todos.value.length * 100) : 0))
-/** 有待办时长期显示；空清单只在点了顶栏按钮/添加时才出现 */
-const todoVisible = computed(() => todos.value.length > 0 || showTodoInput.value)
+/** 有事项 / 已打待办标志 / 正在添加：显示清单块 */
+const todoVisible = computed(() =>
+  todos.value.length > 0 || showTodoInput.value || note.value?.todo === true)
 
-/** 正文 + 待办 → note.text（随改随存），正文里不再出现原始 - [ ] 标记 */
-function syncText() {
-  const n = note.value
-  if (!n) return
-  const next = composeTodoText(body.value, todos.value)
-  if (next === n.text) return
-  n.text = next
-  dirty()
-}
-/** 打开笔记：把散落在正文里的待办行整体搬进待办域 */
-function hydrateTodos(text: string) {
-  const s = splitTodoText(text)
-  body.value = s.body
-  todos.value = s.todos
-  showTodoInput.value = false
-}
-
-function toggleTodo(t: TodoEntry) { t.done = !t.done; syncText() }
+function toggleTodo(t: JotTodo) { t.done = !t.done; dirty() }
 function removeTodo(i: number) {
-  if (i < 0) return
-  todos.value.splice(i, 1)
-  syncText()
+  if (!note.value || i < 0) return
+  note.value.todos?.splice(i, 1)
+  dirty()
 }
 function addTodo() {
   const v = todoDraft.value.trim()
-  if (!v) return
-  todos.value.push(newTodo(v))
+  if (!v || !note.value) return
+  if (!note.value.todos) note.value.todos = []
+  note.value.todos.push(newTodo(v))
   todoDraft.value = ''
-  syncText()
+  dirty()
 }
-/** 行内编辑的收尾：清空则删行，否则回写正文（回车 = 失焦，走同一路径） */
-function commitTodo(t: TodoEntry) {
+/** 行内编辑的收尾：清空则删行，否则保存当前数组（回车 = 失焦，走同一路径） */
+function commitTodo(t: JotTodo) {
   if (!t.text.trim()) removeTodo(todos.value.indexOf(t))
-  else syncText()
+  else dirty()
 }
 function blurTodoInput(e: Event) { (e.target as HTMLElement | null)?.blur() }
-/** 顶栏按钮：展开待办域并聚焦新增输入（空清单也能加第一条） */
+/** 展开清单并聚焦新增输入（空清单也能加第一条） */
 async function focusTodoAdd() {
   showTodoInput.value = true
   await nextTick()
@@ -206,16 +199,27 @@ function commitDraft() {
   if (todoDraft.value.trim()) addTodo()
   else showTodoInput.value = false
 }
+/** 顶栏「待办」：切换标志（只决定卡型与待办页收录，不动事项） */
+async function toggleTodoIt() {
+  const n = note.value
+  if (!n) return
+  await toggleTodoFlag(n)
+  toast(n.todo ? '已标记为待办笔记' : '已取消待办标志')
+  if (n.todo) { showTodoInput.value = true; void focusTodoAdd() }
+  else if (!todos.value.length) showTodoInput.value = false
+}
 
-/** AI 提取待办：能力保留，但不再占用顶栏（顶栏是本地待办清单入口） */
+/** AI 提取待办：能力保留，但不再占用顶栏（顶栏是待办标志） */
 async function aiTodos() {
   if (!note.value) return
   aiBusy.value = 'todo'
   try {
     const r = await callJot('extract_todos', { noteId: note.value.id })
-    if (r?.ok && r.todos.length) {
-      for (const t of r.todos) todos.value.push(newTodo(`${t.text}${t.due ? `（${t.due}）` : ''}`))
-      syncText(); toast(`已提取 ${r.todos.length} 条待办`)
+    const n = note.value
+    if (r?.ok && r.todos.length && n) {
+      if (!n.todos) n.todos = []
+      for (const t of r.todos) n.todos.push(newTodo(`${t.text}${t.due ? `（${t.due}）` : ''}`))
+      dirty(); toast(`已提取 ${r.todos.length} 条待办`)
     } else toast(r?.ok ? '未发现待办' : (r?.message ?? 'AI 未配置'), Boolean(r?.ok))
   } catch { toast('AI 服务不可用', false) } finally { aiBusy.value = '' }
 }
@@ -246,17 +250,32 @@ const metaLine = computed(() => {
         <component :is="icons.ChevronLeft" :size="20" />
       </button>
       <span class="jot-head-spacer" />
-      <button type="button" class="jot-icon-btn" :aria-label="note.pinned ? '取消置顶' : '置顶'" :title="note.pinned ? '取消置顶' : '置顶'" @click="togglePin(note)">
-        <component :is="icons.Pin" :size="17" :class="{ 'text-brand': note.pinned }" />
-      </button>
-      <button type="button" class="jot-icon-btn" :class="{ 'jot-fav-on': note.fav }" :aria-label="note.fav ? '取消收藏' : '收藏'" :title="note.fav ? '取消收藏' : '收藏'" @click="favIt">
-        <component :is="icons.Star" :size="17" :fill="note.fav ? 'currentColor' : 'none'" />
+      <button
+        type="button" class="jot-icon-btn" :style="flagStyle(note.pinned)"
+        :aria-label="note.pinned ? '取消置顶' : '置顶'" :title="note.pinned ? '取消置顶' : '置顶'"
+        :aria-pressed="note.pinned" @click="togglePin(note)"
+      >
+        <component :is="icons.Pin" :size="17" :style="flagFillStyle(note.pinned)" />
       </button>
       <button
-        type="button" class="jot-icon-btn" :class="{ 'text-brand': todoVisible }"
-        aria-label="待办清单" title="待办清单" @click="focusTodoAdd"
+        type="button" class="jot-icon-btn"
+        :aria-label="note.todo ? '取消待办' : '标记待办'" :title="note.todo ? '取消待办' : '标记待办'"
+        :aria-pressed="note.todo" @click="toggleTodoIt"
       >
-        <component :is="icons.ListChecks" :size="17" />
+        <!-- ListChecks 全是线段、没有可填的面积：开态用同一路径叠两层描边，
+             下层粗墨线当外框、上层细金线当芯，做出「金线包墨边」 -->
+        <span v-if="note.todo" class="jot-flag-stack">
+          <component :is="icons.ListChecks" :size="17" :stroke-width="4" :style="{ stroke: FLAG_EDGE }" />
+          <component :is="icons.ListChecks" :size="17" :stroke-width="2.6" :style="{ stroke: FLAG_FILL }" />
+        </span>
+        <component :is="icons.ListChecks" v-else :size="17" />
+      </button>
+      <button
+        type="button" class="jot-icon-btn" :style="flagStyle(note.fav)"
+        :aria-label="note.fav ? '取消收藏' : '收藏'" :title="note.fav ? '取消收藏' : '收藏'"
+        :aria-pressed="note.fav" @click="favIt"
+      >
+        <component :is="icons.Star" :size="17" :style="flagFillStyle(note.fav)" />
       </button>
       <button type="button" class="jot-icon-btn jot-icon-btn-danger" aria-label="删除笔记" title="删除笔记" @click="del">
         <component :is="icons.Trash2" :size="17" />
@@ -273,16 +292,16 @@ const metaLine = computed(() => {
         @input="touched = true"
       />
       <textarea
-        v-model="body" placeholder="开始记录… @标签"
+        v-model="note.text" placeholder="开始记录… @标签"
         class="jot-editor-text" :class="{ 'has-todos': todos.length > 0 }"
-        @input="syncText"
+        @input="touched = true"
       />
 
-      <!-- 待办域：独立勾选清单，勾选/行内改/增删都即时写回正文末尾的 - [ ] 行 -->
+      <!-- 事项域：独立字段（note.todos），勾选/行内改/增删直接保存数组 -->
       <div v-if="todoVisible" class="jot-todo-block">
         <div v-if="todos.length" class="jot-todo-block-head">
           <component :is="icons.ListChecks" :size="13" class="jot-todo-block-ico" />
-          <span class="jot-todo-block-title">待办</span>
+          <span class="jot-todo-block-title">事项</span>
           <span class="jot-todo-block-count">{{ todosDone }}/{{ todos.length }}</span>
           <span class="jot-todo-bar"><i :style="{ width: todoPct + '%' }" /></span>
         </div>
@@ -295,19 +314,20 @@ const metaLine = computed(() => {
             :aria-label="t.done ? '标记未完成' : '标记完成'" @click="toggleTodo(t)"
           >✓</button>
           <input
-            v-model="t.text" class="jot-todo-block-input" placeholder="待办内容"
-            @input="syncText" @blur="commitTodo(t)" @keyup.enter="blurTodoInput($event)"
+            v-model="t.text" class="jot-todo-block-input" placeholder="事项内容"
+            @input="dirty" @blur="commitTodo(t)" @keyup.enter="blurTodoInput($event)"
           />
-          <button type="button" class="jot-todo-block-del" aria-label="删除待办" @click="removeTodo(i)">
+          <button type="button" class="jot-todo-block-del" aria-label="删除事项" @click="removeTodo(i)">
             <component :is="icons.X" :size="13" />
           </button>
         </div>
+        <p v-if="note.todo && !todos.length" class="jot-todo-block-empty">还没有事项，添加一条试试</p>
         <input
           v-if="showTodoInput" ref="todoInput" v-model="todoDraft"
-          class="jot-todo-block-add" placeholder="添加待办，回车确认"
+          class="jot-todo-block-add" placeholder="添加事项，回车确认"
           @keyup.enter="addTodo" @blur="commitDraft"
         />
-        <button v-else type="button" class="jot-todo-block-more" @click="focusTodoAdd">＋ 添加待办</button>
+        <button v-else type="button" class="jot-todo-block-more" @click="focusTodoAdd">＋ 添加事项</button>
       </div>
 
       <!-- AI 摘要（原顶栏按钮下沉到正文下方，顶栏只留 置顶/收藏/待办/删除） -->

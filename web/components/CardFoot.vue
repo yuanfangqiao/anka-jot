@@ -10,6 +10,8 @@ defineProps<{
   title?: string
   /** 待办进度（有待办才传），卡片上给一眼可读的 n/m */
   todo?: { done: number; total: number } | null
+  /** 只读：不渲染「⋯」（日历卡片是服务端投影，不能直接走本地写路径） */
+  readonly?: boolean
 }>()
 const icons = useUi().icons
 </script>
@@ -18,6 +20,9 @@ const icons = useUi().icons
   <div class="jot-card-foot">
     <span class="jot-card-meta">
       <component :is="icons.Star" v-if="note.fav" :size="11" class="jot-fav-mini" fill="currentColor" />
+      <span v-if="note.todo" class="jot-todo-mini" title="待办笔记">
+        <component :is="icons.ListChecks" :size="11" />
+      </span>
       <span
         v-if="note.syncState !== 'synced'"
         class="jot-sync-dot"
@@ -30,6 +35,7 @@ const icons = useUi().icons
       <span v-if="title" class="jot-card-title">{{ title }}</span>
     </span>
     <button
+      v-if="!readonly"
       type="button" class="jot-more" aria-label="更多操作" title="更多操作"
       @click.stop="openCardMenu(note)"
     >

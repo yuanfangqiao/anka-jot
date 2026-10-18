@@ -81,7 +81,13 @@ async function doStop(): Promise<boolean> {
     realNoteId = n.id
     fresh = n
   }
-  await attachAudio(realNoteId, r.blob, r.duration, r.peaks, [])
+  const att = await attachAudio(realNoteId, r.blob, r.duration, r.peaks, [])
+  if (!att) {
+    // 空录音：不落空笔记，提示重录（麦克风没采到数据时 iOS 会给出 0 字节 blob）
+    if (fresh) realNoteId = props.noteId ?? ''
+    error.value = '这段录音没采到声音，请检查麦克风后重试'
+    return false
+  }
   if (fresh) await flushSave(fresh)
   return true
 }

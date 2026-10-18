@@ -12,7 +12,7 @@ const q = ref('')
 const typeFilter = ref<'' | 'image' | 'audio'>('')
 const tagFilter = ref('')
 
-const FIELD_LABEL: Record<string, string> = { title: '标题', text: '正文', ocr: 'OCR', transcript: '转写' }
+const FIELD_LABEL: Record<string, string> = { title: '标题', text: '正文', ocr: 'OCR', transcript: '转写', todo: '待办' }
 
 const hits = computed<Hit[]>(() => {
   let r = q.value.trim() ? index.query(q.value.trim()) : []

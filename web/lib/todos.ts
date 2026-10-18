@@ -1,63 +1,28 @@
-/** todos.ts — 正文 Markdown 待办的解析与勾选（待办页与详情共用写法：- [ ] / - [x]）。 */
-import type { JotNote } from '../host'
+/** todos.ts — 结构化事项工具。
+ *  事项自 v2 起独立存储在 note.todos（不再写进正文），
+ *  这里只保留：新建、历史正文 `- [ ]` 行的无损拆分、数据归一与统计。 */
+import type { JotNote, JotTodo } from '../host'
 
-export interface TodoItem {
-  noteId: string
-  /** 笔记正文中的行号（0 基） */
-  line: number
-  text: string
-  done: boolean
-  /** 所属笔记标题（无标题时取正文首行） */
-  title: string
-  at: number
+/** 历史正文里的 Markdown 复选框行（仅迁移用） */
+const LEGACY_RE = /^(\s*)[-*]\s*\[([ xX])\]\s*(.*)$/
+
+function uid(): string {
+  const c = globalThis.crypto
+  if (c && 'randomUUID' in c) return c.randomUUID()
+  return `td_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 }
 
-const RE = /^(\s*)[-*]\s*\[([ xX])\]\s*(.*)$/
-
-/** 扫描全部笔记，按「未完成优先 + 新笔记优先」返回待办项 */
-export function collectTodos(notes: JotNote[]): TodoItem[] {
-  const out: TodoItem[] = []
-  for (const n of notes) {
-    if (n.deleted) continue
-    const lines = (n.text || '').split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const m = RE.exec(lines[i])
-      if (!m) continue
-      const text = m[3].trim()
-      if (!text) continue
-      out.push({
-        noteId: n.id,
-        line: i,
-        text,
-        done: m[2].toLowerCase() === 'x',
-        title: n.title || text,
-        at: n.createdAt,
-      })
-    }
-  }
-  return out.sort((a, b) => Number(a.done) - Number(b.done) || b.at - a.at)
+export function newTodo(text = '', done = false): JotTodo {
+  return { id: uid(), text, done }
 }
 
-// ─── 详情页「待办域」用的结构化拆分：存储仍是正文里的 - [ ] 行 ──
-export interface TodoEntry {
-  /** 仅前端用的稳定 key（不入库） */
-  id: string
-  text: string
-  done: boolean
-}
-
-let seq = 0
-export function newTodo(text = '', done = false): TodoEntry {
-  return { id: `td${++seq}`, text, done }
-}
-
-/** 正文 → 「纯正文 + 待办数组」：待办行从任意位置提出，正文尾部空行清掉 */
-export function splitTodoText(text: string): { body: string; todos: TodoEntry[] } {
+/** 正文 → 「纯正文 + 事项」：历史笔记的复选框行从任意位置提出，尾部空行清掉。 */
+export function splitTodoText(text: string): { body: string; todos: JotTodo[] } {
   const lines = (text || '').split('\n')
   const body: string[] = []
-  const todos: TodoEntry[] = []
+  const todos: JotTodo[] = []
   for (const ln of lines) {
-    const m = RE.exec(ln)
+    const m = LEGACY_RE.exec(ln)
     if (m) {
       const t = m[3].trim()
       if (t) { todos.push(newTodo(t, m[2].toLowerCase() === 'x')); continue }
@@ -68,24 +33,51 @@ export function splitTodoText(text: string): { body: string; todos: TodoEntry[] 
   return { body: body.join('\n'), todos }
 }
 
-/** 「纯正文 + 待办数组」→ 存储文本：待办统一收在正文之后，空行分隔 */
-export function composeTodoText(body: string, todos: TodoEntry[]): string {
-  const b = (body || '').replace(/\s+$/, '')
-  const list = todos
-    .map(t => ({ text: t.text.trim(), done: t.done }))
-    .filter(t => t.text)
-    .map(t => `- [${t.done ? 'x' : ' '}] ${t.text}`)
-    .join('\n')
-  return b && list ? `${b}\n\n${list}` : (b || list)
+/** 迁移/读取归一：补齐 todo 标志与 todos 数组，并把正文残留的复选框行拆进数组。
+ *  原地修改并返回是否发生变更（调用方决定是否落库）；**不碰 updatedAt**，避免时间线重排。 */
+export function normalizeNoteTodos(n: JotNote): boolean {
+  let changed = false
+  // 缺字段只补默认值、不算变更：避免升级后首启把所有老笔记都推进 outbox
+  if (n.todo === undefined) n.todo = false
+  else if (typeof n.todo !== 'boolean') { n.todo = Boolean(n.todo); changed = true }
+  if (n.todos === undefined) n.todos = []
+  else if (!Array.isArray(n.todos)) { n.todos = []; changed = true }
+
+  const legacy = splitTodoText(n.text || '')
+  if (legacy.todos.length) {
+    n.text = legacy.body
+    n.todos = [...n.todos, ...legacy.todos]
+    changed = true
+  }
+
+  const seen = new Set<string>()
+  const clean: JotTodo[] = []
+  for (const raw of n.todos) {
+    if (!raw || typeof raw !== 'object') { changed = true; continue }
+    const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+    if (!text) { changed = true; continue }
+    let id = typeof raw.id === 'string' ? raw.id : ''
+    if (!id || seen.has(id)) { id = uid(); changed = true }
+    seen.add(id)
+    const done = Boolean(raw.done)
+    if (done !== raw.done || text !== raw.text || id !== raw.id) changed = true
+    clean.push({ id, text, done })
+  }
+  if (clean.length !== n.todos.length) changed = true
+  n.todos = clean
+  return changed
 }
 
-/** 翻转某行的完成状态（原地改正文），返回是否成功 */
-export function toggleTodoLine(note: JotNote, line: number): boolean {
-  const lines = (note.text || '').split('\n')
-  const m = RE.exec(lines[line] ?? '')
-  if (!m) return false
-  const done = m[2].toLowerCase() === 'x'
-  lines[line] = `${m[1]}- [${done ? ' ' : 'x'}] ${m[3]}`
-  note.text = lines.join('\n')
-  return true
+/** 卡片/待办页的进度统计（空列表 total=0） */
+export function todoStat(todos?: JotTodo[]): { total: number; done: number; pct: number } {
+  const list = todos ?? []
+  let done = 0
+  for (const t of list) if (t.done) done++
+  const total = list.length
+  return { total, done, pct: total ? Math.round((done / total) * 100) : 0 }
+}
+
+/** 搜索用：把事项文本拼成一段（不参与展示） */
+export function todoText(todos?: JotTodo[]): string {
+  return (todos ?? []).map(t => t.text).join('\n')
 }

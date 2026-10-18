@@ -41,9 +41,9 @@ const showChrome = computed(() => !fullscreen.value)
 
 const TABS = [
   { view: 'home', icon: 'House', label: '首页' },
-  { view: 'calendar', icon: 'CalendarDays', label: '日历' },
   { view: 'todo', icon: 'ListChecks', label: '待办' },
   { view: 'favs', icon: 'Star', label: '收藏' },
+  { view: 'calendar', icon: 'CalendarDays', label: '日历' },
   { view: 'discover', icon: 'Compass', label: '发现' },
 ]
 

@@ -113,7 +113,9 @@
 ```
 id          string  pk
 title       string           // 空则取正文首行
-text        string           // 轻格式：# 标题、**加粗**、- [ ] 待办、@标签
+text        string           // 纯正文：# 标题、**加粗**、@标签（不再存放事项）
+todo        boolean          // 待办标志：只决定卡型与待办页收录
+todos       {id,text,done}[] // 事项列表：独立存储，关掉标志也不删
 tags        string[]         // 冗余存储，权威在 Tag 表
 source      'text'|'camera'|'album'|'voice'|'share'
 createdAt   number           // ms epoch
@@ -183,6 +185,8 @@ plugins/jot/
 ```
 
 **读写路径原则**：一切写先落 IndexedDB（离线可用），同步是后台行为；读默认读本地，服务端仅在「拉取对账」时读。这与 Obsidian 的本地所有权一致，也是"离线模式·已本地保存"横幅（屏⑥）的数据基础。
+
+**例外（2026-10-18）**：日历页（屏④）的读路径改为服务端——整月计数 `calendar_counts` + 当日 `notes_by_day` 分页，避免为打点遍历本地全量镜像；写路径与 outbox 不变，卡片是只读投影，点开时才按 id 取全文回填本地。因此日历只统计**已推送**的记录，进入页面会先尝试 `pushOutbox()` 并提示「N 条待同步」。
 
 ---
 
@@ -324,6 +328,8 @@ server/
 | method | args | 返回 | 说明 |
 |---|---|---|---|
 | `snapshot` | `{sinceRev?}` | `{notes,attachments,tags,serverRev}` | 对账拉取（全量/增量） |
+| `calendar_counts` | `{dayStarts:number[], knownRev?}` | `{days:number[], rev, unchanged}` | 日历整月打点：客户端给 N+1 个本地零点毫秒边界，服务端只做区间计数；`knownRev` 命中只回 `rev` |
+| `notes_by_day` | `{startMs, endMs, cursor?, limit?}` | `{notes, nextCursor, hasMore}` | 日历当日列表 keyset 分页（`createdAt DESC, id DESC`）；正文只回 600 字 `preview` + `textLen` |
 | `upsert_note` | `{note, atts?, removedAtts?}` | `{ok,serverRev}` | LWW 合并；`atts` 按 id 增量 upsert（不隐式删除），删除必须走 `removedAtts` |
 | `delete_note` | `{id}` | `{ok}` | tombstone |
 | `list_tags` | `{}` | `{tags:[{name,color,pinned,count}]}` | |

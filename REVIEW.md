@@ -81,15 +81,15 @@ host.ts      唯一宿主边界（uiCtx 适配）
 server/      main(RPC)、store(SQLite)、media(上传落盘)、thumbnails(FFmpeg)、ai(ctx.llm)
 ```
 
-**数据模型（两端同构）**：Note `id/title/text/tags/source/createdAt/updatedAt/pinned/fav/color/location/deleted/rev/syncState`；Att `id/noteId/kind/serverPath/thumbPath/尺寸/时长/peaks/ocrText/transcript/sha256/size/pendingOcr`；Tag `name pk/color/pinned/lastUsedAt`；Outbox `seq/type/noteId|name/attempts`；服务端 `notes/atts/tags/media(sha256→path)/kv(serverRev 单调计数)`；媒体 `data/media/<sha[:2]>/<sha>.<ext>`，缩略图同目录 `<sha>.thumb.<thumbsha16>.jpg`（兼容旧名）。
+**数据模型（两端同构）**：Note `id/title/text/tags/source/createdAt/updatedAt/pinned/fav/todo/todos/color/location/deleted/rev/syncState`；Att `id/noteId/kind/serverPath/thumbPath/尺寸/时长/peaks/ocrText/transcript/sha256/size/pendingOcr`；Tag `name pk/color/pinned/lastUsedAt`；Outbox `seq/type/noteId|name/attempts`；服务端 `notes/atts/tags/media(sha256→path)/kv(serverRev 单调计数)`；媒体 `data/media/<sha[:2]>/<sha>.<ext>`，缩略图同目录 `<sha>.thumb.<thumbsha16>.jpg`（兼容旧名）。
 
 **写读链路**：读一律 IDB；写 = IDB（事实源）+ outbox → 后台上推 → 只在拉取对账时读服务端。
 
 **LWW 粒度是整篇笔记**：附件列表随笔记一起被替换，没有字段级合并、没有设备 ID、没有 CAS。
 
-**待办映射**：存储仍是正文 `- [ ]` 行（可搜、可 AI 读、可跨端同步，零额外表）；详情页 `splitTodoText` 拆出清单、编辑后 `composeTodoText` 拼回正文尾部；卡片/待办页再次解析用于展示。
+**事项与待办标志**：`note.todos` 是独立结构化字段（JSON 列），勾选/增删只改数组；`note.todo` 只是标志，决定待办卡与待办页收录，两者互不影响。历史正文 `- [ ]` 行由客户端懒迁移 + 服务端一次性迁移 + 写入归一化三重拆出，迁移不改 `updatedAt`。
 
-**卡片分类顺序**：有待办 → 复合卡（只显示清单）→ 无媒体 → 文字卡 → 纯语音/纯视频/纯图 → 复合卡；尺寸由 `jot-card-std / -text / -voice` 固定。
+**卡片分类顺序**：`todo` 标志 → 待办卡（3:4 只显示清单）；否则无附件 → 文字卡；纯语音/纯视频/纯图 → 对应媒体卡；其余（媒体 + 文字/事项）→ 复合卡，有清单时清单占位、媒体不上卡；尺寸由 `jot-card-std / -text / -voice` 固定。
 
 **媒体管线**：采集即压缩（canvas 重编码 + 480px thumb；视频一次性 metadata/seek/canvas 抽帧并超时释放解码器）→ 附件落 IDB → `upload_begin`（可带 thumbB64，sha 命中即秒传）→ `upload_chunk`×N → `upload_end`（长度 + sha256 双校验、临时文件原子改名）→ 服务端缺封面再补 FFmpeg（`BoundedSemaphore(2)`、单次 15s、`-protocol_whitelist file,pipe`）。
 

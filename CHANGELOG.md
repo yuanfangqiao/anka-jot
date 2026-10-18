@@ -4,6 +4,48 @@
 
 ## [Unreleased]
 
+### 修复（2026-10-18 0 字节录音附件让 outbox 永久 400「文件大小非法: 0」）
+- **现象**：`upload_begin` 400，`size: 0`、`sha256: e3b0c442…`（空串的哈希），`drainOutbox` 每次心跳与日历进入都重试同一条 `note.upsert`，队列永远排不空。
+- **根因**：录音结束时 `MediaRecorder` 没产出任何分片（iOS 音频会话失效 / 起录即停），`attachAudio` 照旧把 0 字节 blob 落库；服务端 `upload_begin` 校验 `size>0` 恒定拒绝，本地这条笔记又没有别的上传路径。
+- **自愈（`lib/sync.ts`）**：`uploadAtt` 发现本地 blob 缺失或 0 字节时直接 `delAtt` 丢弃该附件并继续推笔记；若丢完笔记已空（空语音壳）则 `tombstone` 整条归档，不再把空笔记推上服务端。旧数据下次同步自动清掉，无需手工清库。
+- **顺手修**：附件缺 `sha256` 但 blob 有数据时改为现算哈希再上传（原先按坏附件硬失败，会误伤旧数据）。`uploadAtt` 返回值改为「是否丢弃了附件」。
+- **源头（`state/store.ts` + `views/Record.vue`）**：`attachAudio` 拒收 0 字节 blob 并返回 `null`，录音页给出「这段录音没采到声音，请检查麦克风后重试」且不落空笔记。
+- **验证**：`cd web && npm run build` 通过；`@vue/compiler-sfc` 单独编译 `Record.vue` 通过；改动文件 lint 无报错。
+
+### 变更（2026-10-18 日历改远端数据源：整月计数 + 按天分页）
+- **数据源切换**：日历页不再遍历本地全量 `notes` 打点，改为服务端聚合。`Calendar.vue` 重写为显式状态机（月份/当日各自 `loading` / `ready` / `error` + 请求序号），写路径与同步模型完全未动。
+- **服务端两个新方法**（`server/main.py` + `store.py`）：
+  - `calendar_counts(dayStarts, knownRev)`：一次返回整月每天真实条数（缺日补 0）与区间 `MAX(rev)`；`knownRev` 命中时只回 `{rev, unchanged: true}`，不重传数组。
+  - `notes_by_day(startMs, endMs, cursor, limit)`：按天 keyset 分页（`createdAt DESC, id DESC`），游标为 urlsafe base64 不透明串，`limit` 钳制 1..100。
+- **时区不做服务端推断**：客户端逐日构造 N+1 个「本地零点」毫秒边界，服务端只做数值区间运算；夏令时 23/25 小时的天不会错格（未使用 SQL `localtime`）。
+- **索引**：新增 `idx_notes_created(createdAt DESC, id DESC)` 与部分索引 `idx_notes_alive_created(createdAt) WHERE deleted=0`，计数走 index-only scan。
+- **正文不回传**：列表投影用 `substr(text,1,600) AS preview` + `length(text) AS textLen`（`MAX_TEXT_LEN` 20 万，全文会让单页膨胀到 MB 级）；点开时 `get_note` 取全文、写回 IndexedDB 后再进详情。
+- **缓存与一致性**：月缓存键含时区指纹（旅行/改时区自动失效），会话内最多 12 个月；`MAX(rev)` 含软删行，删除后打点立即失效。
+- **待同步提示**：进入日历前 `pushOutbox()` 与 1.5s 超时竞速；`syncState.pending > 0` 显示「N 条待同步」；推送完成或 rev 变化后静默重取月份，列表只给「有更新 · 刷新」胶囊、不重置滚动位置。
+- **只读卡片**：`NoteCard` / `CardFoot` 新增 `readonly` prop，日历列表隐藏置顶角标与「⋯」，避免把 600 字预览当正文写入。
+- **新增文件**：`web/lib/api.calendar.ts`（边界、时区指纹、月缓存、分页、`ensureLocalNote` 回填）、`tests/test_calendar_store.py`（10 例）。
+- **验证**：`python3 tests/test_calendar_store.py` 10 例通过；`python3 tests/test_todos_store.py` 无回归；`cd web && npm run build` 通过。
+- **偏差与未做**：未引入 `AbortController` 取消在途请求（用请求序号丢弃过期响应，目录未改 `host.ts` 的调用签名）；下拉刷新未接管（同步完成自动校验 + 错误重试替代）；设备时钟偏差导致的跨天仍未处理。
+
+### 变更（2026-10-18 导航与顶栏按钮顺序）
+- 顶部胶囊标签改为「首页 / 待办 / 收藏 / 日历 / 发现」：把高频的待办、收藏提到日历前面（`App.vue` 的 `TABS` 数组，样式按数组顺序渲染，`TAB_ROOTS` 是集合、不受影响）。
+- 详情顶栏四按钮改为「置顶 / 待办 / 收藏 / 删除」，与标签栏顺序对齐；图标、行为、`aria-pressed` 均不变，仅调换 DOM 顺序。
+
+### 变更（2026-10-18 详情顶栏三键开态：深色边 + 金色心）
+- 顶栏「置顶 / 待办 / 收藏」的开态统一为双色标志：形状不变、不加圆底，描边加深到 `--text-0`，内部填金 `--warn`（`flagStyle()` + `flagFillStyle()` 内联到 `<button>` / `<svg>`）。未开仍是灰色细描边。
+- 待办图标用的 `ListChecks` 全是线段、无面积可填，改用叠层描边（`.jot-flag-stack`）：同一路径叠两层，下层 `stroke-width: 4` 的墨色露出外缘当框，上层 `stroke-width: 2.6` 的金色当芯，同样得到「金线包墨边」，不再需要换图或铺底色。
+- 填色用 `style` 而不是 `fill` 属性：SVG 表现属性里的 `var()` 在部分内核不可靠。
+- 着色走内联而非样式表类：`text-brand` 加在按钮上会被后注入的 `.jot-icon-btn { color }` 盖掉，只有同时改 `fill` 才看得出变化。
+- 卡片脚注的待办小图标同步转琥珀（`.jot-todo-mini`），与顶栏同一色系；待办进度胶囊仍按期变绿。
+- 移除未生效的 `.jot-fav-on` / `.jot-todo-on` 与重复的 `.jot-fav-mini`（保留 `ui.css.cards.ts` 一份），`README.md` 语义类速查相应更新。
+
+### 新增（2026-10-18 事项独立字段 + 待办标志 + 六类卡型）
+- **事项从正文拆出**：新增 `note.todos: {id,text,done}[]`，勾选/行内改/增删只改数组并走原有 500ms 防抖保存；正文 `text` 不再夹带 `- [ ]` 行。`lib/todos.ts` 重写为结构化工具（新建 / 历史行拆分 / 归一 / 统计）。
+- **待办标志**：新增 `note.todo`，详情顶栏第三按钮与卡片菜单均可开关。标志只决定「待办卡」与待办页收录；关掉标志后事项照常保留、可勾选。`persist` 空笔记判定纳入事项与标志，纯清单笔记不会被丢弃。
+- **六类卡型**：文字 / 图片 / 语音 / 视频 / 待办 / 复合。待办卡 3:4 只显示标题→正文→清单；未打标志的复合卡有清单时清单占满剩余空间、媒体不上卡；待办页 `Todo.vue` 改为只按 `note.todo` 收录。
+- **老数据三重迁移**：客户端 `initStore` / `reload` 懒迁移并批量单事务写回 + 入 outbox；服务端加 `todo`/`todos` 列并在 `kv` 标记下一次性拆分，`rev` 连续分配保证快照分页不漏行；`upsert_note` 对缺省字段保留库中原值，旧客户端继续写正文复选框也能就地拆分。迁移不改 `updatedAt`，时间线不重排。
+- **搜索与 AI**：本地索引新增 `todo` 字段（命中标注「待办」），服务端 `search` 命中 `todos` JSON；`ai._gather_text` 纳入事项文本。新增 `tests/test_todos_store.py`（7 例）覆盖拆分、补列迁移、缺省保留、快照序列化与搜索。
+
 ### 修复（2026-10-18 P0 六项：数据一致性与资源生命周期）
 - **录音页卸载丢录音**：`onUnmounted` 只 `rec.stop()` 不落库，切 tab / 重置导航栈会静默丢掉整段录音。抽出 `doStop()` 统一「停止 → 建笔记 → 附件落库 → 持久化」，按钮与卸载共享同一次停止（`finishing`），卸载路径也走完整落库。
 - **自动保存后整表重载**：`persist → pushOutbox → onChanged → reload` 原本每次都全表替换 `notes` 并逐条 `attsOf`。同步回调改为回报受影响的 note id，`store.patchFromSync()` 只重读这几条（>40 条或全量对账才退回 `reload`）；新增 `db.attsByNote()` 一次读全量附件分组，初始化/重载不再 N+1。
@@ -11,6 +53,7 @@
 - **OCR 路径穿越**：`ai.ocr_image` 直接 `data_dir.parent / att.serverPath` 读盘（该字段可由客户端写库），构成任意文件读取并把内容发往云端模型。新增 `MediaStore.resolve_media()` 作为唯一读盘入口（`data/media` 白名单 + `is_file`），`ocr_image` 只接受已校验的绝对路径。
 - **附件被全量替换**：`store.upsert_note` 命中 LWW 时 `DELETE` 全部附件行再插入客户端列表，客户端拉取又按「服务端没有」删本地附件与 blob，双设备下会丢 OCR / 转写 / 波形元数据。服务端改为按 `att.id` 增量 upsert，删除只认显式 `removedAtts`；客户端只在笔记被删除时清理附件。
 - **相机切原生不停流**：`useNative()` 未停止 `getUserMedia` 流，指示灯常亮且系统相机可能抢不到摄像头。切换前 `stop` 所有 track 并清空 `stream`。
+- **相机在 PWA 里反复授权**：真机判定混入 `navigator.plugins.length === 0`，而 iOS / Android Chrome 的 plugins 可能非空 → 真机被判成桌面，拍照默认进实时取景并 `getUserMedia`，PWA 每次打开都重新询问摄像头授权。恢复只看 UA（含 iPadOS 桌面 UA + 多点触控），真机一律默认系统相机 `<input capture>`，不申请网页摄像头权限。
 
 ### 修复 / 变更（2026-10-18 首页置顶横滑条）
 - 首页「全部 / 收藏 / 标签」筛选行被压成一条短横：滚动区为纵向 flex 容器，该行带 `overflow-x-auto`，其自动最小高度按规范归零，负自由空间全部压在它身上再被自身裁切。修复为收纳进搜索框右侧筛选按钮（底部弹层选 全部 / 收藏 / 标签 + 清除），并在 `.jot-search-row` / `.jot-shelf` 上显式 `flex: 0 0 auto`，不再依赖宿主是否构建 `shrink-0`。

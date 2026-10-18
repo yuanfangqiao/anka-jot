@@ -118,6 +118,7 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-vid-play` / `jot-vid-dur` | 视频卡 ▶ 播放徽章 / 左下时长角标 |
 | `jot-videocard` | 详情页视频块（16:9 海报，点击全屏播放） |
 | `jot-card-foot` | 卡片底部信息行（时间 + 同步点） |
+| `jot-fav-mini` / `jot-todo-mini` | 卡片脚注的收藏 / 待办小标志（琥珀）；详情顶栏同一色由组件内联 `var()` 上色 |
 | `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` | 首页通栏方块工具条（圆角方块瓷贴，与宿主胶囊 dock 区分） |
 | `jot-date-sep` | 时间线日期分隔（双侧渐变细线 + 加粗标签） |
 | `jot-cover-missing` | 封面图加载失败渐变占位 |
@@ -125,6 +126,11 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-refresh-list` / `jot-refresh-status` | 列表内下拉刷新与状态提示，隔离浏览器页面刷新 |
 | `jot-overlay-blur` / `jot-safe-bottom` / `jot-sheet-maxh` | Sheet 弹层 |
 | `jot-rail` / `jot-dot` | 日历时间轴定位 |
+| `jot-cal-nav` | 日历翻月钮（圆底 hover，替代任意值 padding 组合） |
+| `jot-cal-note` / `jot-cal-warn` / `jot-cal-link` | 日历状态行：载入中 / 离线缓存 / 失败 + 重试链接 |
+| `jot-cal-chip` | 日历右上角小胶囊（待同步 / 离线 / 有更新） |
+| `jot-cal-retry` | 日历错误重试、加载更多按钮 |
+| `jot-cal-skel` | 日历首屏与续页骨架卡（含 `prefers-reduced-motion` 降级） |
 | `jot-scan-*` | 扫描参考框 |
 
 ## Do / Don't

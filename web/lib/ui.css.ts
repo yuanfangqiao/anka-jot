@@ -202,10 +202,13 @@ html[data-theme='dark'] .jot-bar-item-voice { --tile: #bb6a86; }
 }
 .jot-icon-btn:active { background: var(--glass, rgb(60 54 44 / 0.05)); }
 .jot-icon-btn-danger { color: var(--err, #d94f4f); }
-/* 已收藏：琥珀色实心星（未收藏沿用顶栏默认灰） */
-.jot-fav-on { color: var(--warn, #d99a2b); }
-/* 卡片角标处的收藏星：小、实心、琥珀色，与置顶图钉并列 */
-.jot-fav-mini { flex: 0 0 auto; color: var(--warn, #d99a2b); }
+/* 顶栏三键（置顶 / 待办 / 收藏）的开态：
+ *  黑色描边 + 金色填充由 Detail.vue 内联到 <button>（类会被 .jot-icon-btn 的颜色规则盖掉）；
+ *  待办图标是纯线段、无法填充，用下面这个叠层容器做「金线包墨边」：
+ *  两层同一路径同心叠加，下层加粗的墨线露出外缘当框、上层细金线当芯。 */
+/* 尺寸与 Detail.vue 里图标的 :size="17" 对应，改尺寸要同步改这里 */
+.jot-flag-stack { position: relative; display: inline-flex; width: 17px; height: 17px; }
+.jot-flag-stack > svg { position: absolute; inset: 0; }
 /* 返回键图形与正文左缘对齐（按钮内 8px 留白向外抵消） */
 .jot-detail-head > .jot-icon-btn:first-child { margin-left: -8px; }
 .jot-head-spacer { flex: 1 1 auto; }
@@ -301,6 +304,11 @@ html[data-theme='dark'] .jot-bar-item-voice { --tile: #bb6a86; }
   cursor: pointer;
 }
 .jot-todo-block-more:active { color: var(--brand, #2f3b57); }
+.jot-todo-block-empty {
+  margin: 2px 0 4px;
+  font-size: 12px;
+  color: var(--text-2, #a39e90);
+}
 .jot-ai-chip {
   display: inline-flex;
   align-items: center;
@@ -560,6 +568,46 @@ html[data-theme='dark'] .jot-bar-item-voice { --tile: #bb6a86; }
 /* ─── 日历时间轴定位（替代 left-[7px]/-left-[17.5px]/top-5） ─── */
 .jot-rail { position: absolute; left: 7px; top: 8px; bottom: 8px; width: 1px; }
 .jot-dot { position: absolute; left: -17.5px; top: 1.25rem; }
+
+/* ─── 日历远端数据源的状态：翻月钮 / 说明行 / 角标 / 重试 / 骨架 ─── */
+.jot-cal-nav {
+  cursor: pointer; border-radius: 9999px; padding: 6px; color: var(--text-1);
+  transition: background-color 0.15s ease;
+}
+.jot-cal-nav:hover { background: var(--glass, rgba(127, 127, 127, 0.12)); }
+.jot-cal-note {
+  margin-top: 8px; font-size: 11px; line-height: 1.5;
+  color: var(--text-2); text-align: center;
+}
+.jot-cal-warn { color: var(--warn); }
+.jot-cal-link { color: var(--brand); text-decoration: underline; cursor: pointer; }
+.jot-cal-chip {
+  display: inline-flex; align-items: center; border-radius: 9999px;
+  background: var(--glass, rgba(127, 127, 127, 0.14));
+  padding: 2px 8px; font-size: 10.5px; white-space: nowrap; color: var(--text-2);
+}
+.jot-cal-chip.is-warn { color: var(--brand); }
+.jot-cal-retry {
+  cursor: pointer; border-radius: 9999px;
+  background: var(--glass, rgba(127, 127, 127, 0.14));
+  padding: 4px 14px; font-size: 12px; color: var(--brand);
+}
+.jot-cal-skel {
+  height: 128px; border-radius: 16px;
+  background: linear-gradient(100deg,
+    rgba(127, 127, 127, 0.10) 30%,
+    rgba(127, 127, 127, 0.18) 50%,
+    rgba(127, 127, 127, 0.10) 70%);
+  background-size: 220% 100%;
+  animation: jot-cal-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes jot-cal-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -60% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jot-cal-skel { animation: none; }
+}
 
 /* ─── 扫描参考框（替代 h-[70%]/w-[82%]/border-[#3ddc84] 系列） ─── */
 .jot-scan-frame {

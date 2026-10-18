@@ -7,6 +7,7 @@ import * as db from '../lib/db'
 import { processImage, sha256Hex } from '../lib/image'
 import { processVideo } from '../lib/video'
 import { SearchIndex } from '../lib/search'
+import { normalizeNoteTodos } from '../lib/todos'
 import { refreshPending, onSyncChanged, pushOutbox } from '../lib/sync'
 
 export const index = new SearchIndex()
@@ -50,9 +51,19 @@ export const pinnedNotes = computed(() =>
       (pinOrder[b.id] ?? b.updatedAt) - (pinOrder[a.id] ?? a.updatedAt) || b.createdAt - a.createdAt))
 
 // ─── 初始化 ────────────────────────────────────────
+/** 老数据懒迁移：正文 `- [ ]` 行拆进 note.todos，补齐 todo 标志。
+ *  批量单事务落库并入 outbox；不改 updatedAt，时间线不重排。 */
+async function migrateLegacyTodos(ns: JotNote[]) {
+  const changed = ns.filter(n => normalizeNoteTodos(n))
+  if (!changed.length) return
+  await db.saveNotes(changed, true)
+  void pushOutbox()
+}
+
 export async function initStore() {
   const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
   for (const n of ns) n.atts = byNote.get(n.id) ?? []
+  await migrateLegacyTodos(ns)
   notes.value = ns
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
@@ -68,6 +79,7 @@ export async function initStore() {
 export async function reload() {
   const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
   for (const n of ns) n.atts = byNote.get(n.id) ?? []
+  await migrateLegacyTodos(ns)
   notes.value = ns
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
@@ -108,11 +120,21 @@ async function patchFromSync(ids?: string[]) {
   if (changed) tags.value = await db.listTags()
 }
 
+/** 远端按 id 取回的笔记：只并入内存列表与搜索索引，不触发 outbox、不改同步语义。
+ *  持久化由调用方（`lib/api.calendar.ts`）负责，避免这里再引入一条写路径。 */
+export function adoptRemoteNote(note: JotNote) {
+  const i = notes.value.findIndex(n => n.id === note.id)
+  if (i >= 0) notes.value[i] = note
+  else notes.value.push(note)
+  index.upsert(note, note.atts ?? [])
+}
+
 // ─── 笔记 CRUD ─────────────────────────────────────
 export function newNote(source: JotNote['source'] = 'text'): JotNote {
   return {
     id: crypto.randomUUID(), title: '', text: '', tags: [], source,
     createdAt: Date.now(), updatedAt: Date.now(), pinned: false, fav: false,
+    todo: false, todos: [],
     color: null, location: null, deleted: false, rev: 0, syncState: 'local', atts: [],
   }
 }
@@ -148,7 +170,9 @@ export function cancelSave(noteId: string) {
 
 async function persist(note: JotNote) {
   const atts = await db.attsOf(note.id)
-  const empty = !note.title.trim() && !note.text.trim() && atts.length === 0
+  // 纯清单笔记（无标题/正文/附件）必须留下；只点亮待办标志的笔记也算有内容
+  const hasTodos = (note.todos ?? []).some(t => t.text.trim()) || note.todo === true
+  const empty = !note.title.trim() && !note.text.trim() && !hasTodos && atts.length === 0
   if (empty || note.deleted) return
   // 克隆后再写，避免原地改调用方（Detail）对象的 rev/syncState 引发意外 UI 变更
   const next: JotNote = { ...note, atts, updatedAt: Date.now(), syncState: 'local' }
@@ -184,6 +208,12 @@ export async function toggleFav(note: JotNote) {
   await persist(note)
 }
 
+/** 待办标志：只影响卡型与待办页收录，不动事项列表 */
+export async function toggleTodoFlag(note: JotNote) {
+  note.todo = !note.todo
+  await persist(note)
+}
+
 export async function removeNote(note: JotNote) {
   cancelSave(note.id) // 取消残留防抖，防止删除后笔记被 persist 复活
   if (pinOrder[note.id]) { delete pinOrder[note.id]; savePinOrder() }
@@ -214,7 +244,10 @@ export async function attachImage(noteId: string, src: Blob, pendingOcr = false)
 }
 
 export async function attachAudio(noteId: string, blob: Blob, duration: number,
-                                  peaks: number[], transcript: JotAtt['transcript']): Promise<JotAtt> {
+                                  peaks: number[], transcript: JotAtt['transcript']): Promise<JotAtt | null> {
+  // 0 字节录音（流没采到数据 / iOS 音频会话失效）没有任何内容可存：
+  // 落库只会得到空附件，同步时被服务端以「文件大小非法」永久拒绝。直接拒收，由录音页提示。
+  if (!blob.size) return null
   const att: JotAtt = {
     id: crypto.randomUUID(), noteId, kind: 'audio', duration,
     peaks, transcript, sha256: await sha256Hex(blob), size: blob.size, createdAt: Date.now(),
@@ -243,8 +276,9 @@ async function touchNote(noteId: string) {
   let n = await db.getNote(noteId)
   const live = activeNote.value
   if (live && live.id === noteId) {
-    // 编辑器有未保存内容：以其标题/正文/标签为准（atts 以刚写入 DB 的为准）
-    n = { ...(n ?? live), title: live.title, text: live.text, tags: [...live.tags] }
+    // 编辑器有未保存内容：以其标题/正文/标签/事项为准（atts 以刚写入 DB 的为准）
+    n = { ...(n ?? live), title: live.title, text: live.text, tags: [...live.tags],
+      todo: live.todo, todos: (live.todos ?? []).map(t => ({ ...t })) }
   } else if (!n) {
     n = notes.value.find(x => x.id === noteId) ?? null
   }

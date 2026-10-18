@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** CardMenu — 卡片「⋯」快速菜单（App 级底部面板）：
- *  编辑 / 置顶 / 收藏 / 删除。操作直接写 store，时间线与收藏页响应式刷新。
+ *  编辑 / 置顶 / 收藏 / 待办标志 / 删除。操作直接写 store，时间线与收藏页响应式刷新。
  *  应用内 absolute 定位（与 FilterSheet 一致）：Teleport 到宿主 body 会沉到底部 dock 下。 */
 import { computed, ref, watch } from 'vue'
 import { toast, useUi } from '../host'
 import { push } from '../lib/nav'
 import { useBack } from '../lib/useBack'
 import { closeCardMenu, menuNote } from '../state/menu'
-import { removeNote, toggleFav, togglePin } from '../state/store'
+import { removeNote, toggleFav, togglePin, toggleTodoFlag } from '../state/store'
 
 const icons = useUi().icons
 const note = computed(() => menuNote.value)
@@ -46,6 +46,14 @@ async function fav() {
   toast(n.fav ? '已收藏' : '已取消收藏')
 }
 
+async function todo() {
+  const n = note.value
+  closeCardMenu()
+  if (!n) return
+  await toggleTodoFlag(n)
+  toast(n.todo ? '已标记为待办笔记' : '已取消待办标志')
+}
+
 async function del() {
   const n = note.value
   if (!n) return
@@ -76,6 +84,10 @@ async function del() {
       <button type="button" class="jot-menu-row" role="menuitem" @click="fav">
         <component :is="icons.Star" :size="19" class="jot-menu-ico" :fill="note.fav ? 'currentColor' : 'none'" />
         <span>{{ note.fav ? '取消收藏' : '收藏' }}</span>
+      </button>
+      <button type="button" class="jot-menu-row" role="menuitem" @click="todo">
+        <component :is="icons.ListChecks" :size="19" class="jot-menu-ico" />
+        <span>{{ note.todo ? '取消待办' : '标记待办' }}</span>
       </button>
 
       <div class="jot-menu-sep" />

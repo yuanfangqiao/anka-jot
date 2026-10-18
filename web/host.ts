@@ -42,12 +42,23 @@ export interface JotAtt {
   transcript?: Seg[] | null; sha256?: string; createdAt: number
   pendingOcr?: boolean
 }
+/** 事项：独立于正文与待办标志存储，任何卡片类型都可拥有 */
+export interface JotTodo {
+  /** 稳定 key（随机串），勾选/删除时列表不错位 */
+  id: string
+  text: string
+  done: boolean
+}
 export interface JotNote {
   id: string; title: string; text: string; tags: string[]
   source: 'text' | 'camera' | 'album' | 'voice' | 'share'
   createdAt: number; updatedAt: number; pinned: boolean
   /** 收藏（与置顶独立：置顶影响排序，收藏只做标记与筛选） */
   fav?: boolean
+  /** 待办标志：只决定卡型（待办卡）与待办页收录，与事项列表无关 */
+  todo?: boolean
+  /** 事项列表：独立存储，关掉待办标志也不删除 */
+  todos?: JotTodo[]
   color: string | null; location: { lat: number; lng: number; name?: string } | null
   deleted: boolean; rev: number
   syncState?: 'local' | 'syncing' | 'synced'
@@ -67,7 +78,7 @@ function _argDigest(args: Record<string, unknown>): string {
 
 export async function callJot<T = any>(method: string, args: Record<string, unknown> = {}): Promise<T> {
   // 只约束同步请求；AI/OCR 等长任务保持原行为。
-  const bounded = /^(snapshot|stats|ensure_thumbnail|upload_.*|upsert_note|delete_note|upsert_tag)$/.test(method)
+  const bounded = /^(snapshot|stats|ensure_thumbnail|upload_.*|upsert_note|delete_note|upsert_tag|calendar_counts|notes_by_day|get_note)$/.test(method)
   const controller = new AbortController()
   const timer = bounded ? setTimeout(() => controller.abort(), 60_000) : null
   try {
