@@ -8,7 +8,7 @@ import { needsInstallHint } from '../lib/platform'
 import * as db from '../lib/db'
 import { pop } from '../lib/nav'
 import { fmtDur } from '../lib/format'
-import { attachAudio, newNote, saveDebounced } from '../state/store'
+import { attachAudio, flushSave, newNote } from '../state/store'
 import Waveform from '../components/Waveform.vue'
 import { useBack } from '../lib/useBack'
 
@@ -39,6 +39,7 @@ async function hintInstallOnce() {
 
 async function start() {
   error.value = ''
+  finishing = null
   void hintInstallOnce()
   try {
     rec = new JotRecorder()
@@ -55,11 +56,24 @@ async function start() {
 }
 
 async function stop() {
-  recording.value = false
+  if (!(await finishRecording())) return
+  toast('语音笔记已保存')
+  emit('done', realNoteId)
+  pop()
+}
+
+/** 停止并落库。停止途中再次调用（按钮 + 卸载并发）共享同一次停止，不会录两遍。 */
+let finishing: Promise<boolean> | null = null
+function finishRecording(): Promise<boolean> {
+  return finishing ??= doStop()
+}
+
+async function doStop(): Promise<boolean> {
   window.clearInterval(timer)
+  recording.value = false
   const r = await rec?.stop().catch(() => null)
   rec = null
-  if (!r) return
+  if (!r) return false
   // 建笔记须等音频附件落库后再持久化，否则 persist 判「空笔记」跳过 → 整条丢失
   let fresh: JotNote | null = null
   if (!realNoteId) {
@@ -68,15 +82,14 @@ async function stop() {
     fresh = n
   }
   await attachAudio(realNoteId, r.blob, r.duration, r.peaks, [])
-  if (fresh) saveDebounced(fresh, true)
-  toast('语音笔记已保存')
-  emit('done', realNoteId)
-  pop()
+  if (fresh) await flushSave(fresh)
+  return true
 }
 
 onUnmounted(() => {
   window.clearInterval(timer)
-  if (recording.value) void rec?.stop().catch(() => {})
+  // 切 tab / 重置导航栈会直接卸载本页：只 stop 不落库会静默丢掉整段录音
+  if (recording.value || rec) void finishRecording()
 })
 </script>
 

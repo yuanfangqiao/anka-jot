@@ -128,7 +128,12 @@ async function finish() {
 }
 
 /** 切换拍摄模式：原生（系统相机，无网页授权）/ 实时取景（getUserMedia） */
-function useNative() { nativeMode.value = true; error.value = '' }
+function useNative() {
+  // 必须停掉实时流再交棒给系统相机：否则指示灯常亮、系统相机也可能抢不到摄像头
+  stream?.getTracks().forEach(t => t.stop()); stream = null
+  nativeMode.value = true
+  error.value = ''
+}
 function useLive() { nativeMode.value = false; error.value = ''; void openCamera() }
 
 onMounted(() => {

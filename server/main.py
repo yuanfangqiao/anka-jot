@@ -75,19 +75,24 @@ class Jot(Service):
         return self.store.snapshot(int(sinceRev or 0), min(int(limit or 500), 1000))
 
     # ─── 笔记 ───────────────────────────────────────
-    def upsert_note(self, note: dict, atts: list | None = None):
+    def upsert_note(self, note: dict, atts: list | None = None,
+                    removedAtts: list | None = None):
         note = _valid_note(note)
-        # atts=None → 保留服务端现有附件；显式 list 才全量替换（超限告警而非静默）
+        # atts=None → 不动服务端附件；显式 list → 按 id 增量 upsert（不隐式删除）。
+        # 删除只认 removedAtts：兼容旧客户端的全量列表语义，避免过期列表抹掉新附件。
         if atts is not None:
             if len(atts) > MAX_ATTS_PER_NOTE:
                 log.warning('atts 超限截断: %d > %d (noteId=%s)',
                             len(atts), MAX_ATTS_PER_NOTE, note.get('id'))
                 atts = atts[:MAX_ATTS_PER_NOTE]
+        if removedAtts is not None:
+            if not isinstance(removedAtts, list) or not all(isinstance(a, str) for a in removedAtts):
+                raise ValueError('removedAtts 非法')
         if atts:
             atts = [{**a, **self.media.try_thumbnail(a['serverPath'], a['kind'])}
                     if a.get('serverPath') and a.get('kind') in ('image', 'video') and not a.get('thumbPath')
                     else a for a in atts]
-        final, applied = self.store.upsert_note(note, atts)
+        final, applied = self.store.upsert_note(note, atts, removedAtts)
         log.info('upsert_note 落库: id=%s rev=%s applied=%s',
                  final['id'], final['rev'], applied)
         return {'note': final, 'applied': applied, 'serverRev': final['rev']}
@@ -148,7 +153,9 @@ class Jot(Service):
             raise ValueError('附件不存在')
         if att['kind'] != 'image':
             raise ValueError('仅图片支持 OCR')
-        r = ai_mod.ocr_image(self.ctx, DATA_DIR, att)
+        # 路径必须经 MediaStore 白名单解析：atts.serverPath 可由客户端写入，不能直接拼
+        fp = self.media.resolve_media(str(att.get('serverPath') or ''))
+        r = ai_mod.ocr_image(self.ctx, fp)
         if r.get('ok'):
             self.store.set_att_text(str(attId), 'ocrText', r['text'])
         return r

@@ -82,10 +82,14 @@ class Store:
             return int(row[0]) if row else 0
 
     # ─── 笔记 ────────────────────────────────────────
-    def upsert_note(self, note: dict, atts: list | None) -> tuple[dict, bool]:
+    def upsert_note(self, note: dict, atts: list | None,
+                    removed_att_ids: list | None = None) -> tuple[dict, bool]:
         """LWW 合并。返回 (最终笔记, 是否采用了客户端版本)。
-        atts=None 表示调用方未提供附件列表 → 保留服务端现有附件；
-        atts=[] 表示显式清空。"""
+
+        附件语义：atts=None → 不动附件；atts=list → 按 id 增量 upsert（不做隐式删除）。
+        删除必须显式放在 removed_att_ids 里——全量替换会让「客户端列表过期」
+        变成静默丢附件（OCR / 转写 / 波形元数据一起没）。
+        """
         nid = note.get('id')
         if not nid:
             raise ValueError('note.id 缺失')
@@ -117,10 +121,10 @@ class Store:
                           'ON CONFLICT(id) DO UPDATE SET '
                           + ','.join(f'{k}=excluded.{k}' for k in NOTE_COLS),
                           tuple(vals[k] for k in NOTE_COLS))
-                if atts is not None:
-                    c.execute('DELETE FROM atts WHERE noteId=?', (nid,))
-                    for a in atts or []:
-                        self._insert_att(c, nid, a)
+                for a in atts or []:
+                    self._insert_att(c, nid, a)
+                for aid in removed_att_ids or []:
+                    c.execute('DELETE FROM atts WHERE id=? AND noteId=?', (str(aid), nid))
                 for t in (note.get('tags') or []):
                     c.execute('INSERT INTO tags(name,lastUsedAt) VALUES(?,?) '
                               'ON CONFLICT(name) DO UPDATE SET lastUsedAt=excluded.lastUsedAt',

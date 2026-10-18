@@ -62,9 +62,9 @@ const videoInput = ref<HTMLInputElement>()
 /** ＋五入口统一分发 */
 function onPick(kind: 'text' | 'camera' | 'video' | 'album' | 'voice') {
   if (kind === 'text') {
-    const n = newNote('text')
-    captureLocation(n)
-    push('note', { id: n.id, fresh: '1' })
+    // 只传 id：位置由 Detail 在「真正会被保存的那个对象」上采集，
+    // 这里另建对象再采集会落到一个没人入库的临时对象上，位置必丢。
+    push('note', { id: crypto.randomUUID(), fresh: '1' })
   } else if (kind === 'camera') push('camera')
   else if (kind === 'voice') push('record')
   else if (kind === 'album') albumInput.value?.click()

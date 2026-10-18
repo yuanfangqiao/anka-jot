@@ -99,6 +99,14 @@ class MediaStore:
         except ValueError:
             return False
 
+    def resolve_media(self, path: str) -> Path:
+        """把客户端上报的 serverPath 解析成已校验的绝对路径（唯一读盘入口）。
+
+        path 必须形如 data/media/...，解析后必须仍在 media_dir 内且是文件，
+        否则抛 ValueError。AI/预览等需要读原文件的能力都经这里，禁止自行拼路径。
+        """
+        return self._source(path)
+
     def _source(self, path: str) -> Path:
         if not isinstance(path, str) or not path.startswith('data/media/'):
             raise ValueError('媒体文件路径非法')

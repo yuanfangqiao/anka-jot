@@ -45,17 +45,19 @@ def _available(ctx) -> bool:
     return bool(llm and getattr(llm, 'adapters', None))
 
 
-def ocr_image(ctx, data_dir: Path, att: dict) -> dict:
+def ocr_image(ctx, fp: Path) -> dict:
+    """fp 必须是调用方已用 MediaStore.resolve_media 校验过的绝对路径。
+
+    这里不再接受客户端上报的 serverPath 自行拼路径：note 表可由客户端写入，
+    拼 data_dir.parent / path 会变成任意文件读取，且读到的内容会发给云端模型。
+    """
     if not _available(ctx):
         return NO_LLM
-    path = att.get('serverPath')
-    if not path:
-        raise ValueError('附件尚未上传，无法 OCR')
-    fp = data_dir.parent / path
-    if not fp.is_file():
+    source = Path(fp)
+    if not source.is_file():
         raise ValueError('媒体文件不存在')
-    b64 = base64.b64encode(fp.read_bytes()).decode()
-    ext = fp.suffix.lstrip('.').lower() or 'jpeg'
+    b64 = base64.b64encode(source.read_bytes()).decode()
+    ext = source.suffix.lstrip('.').lower() or 'jpeg'
     mime = 'image/png' if ext == 'png' else ('image/webp' if ext == 'webp' else 'image/jpeg')
     messages = [{'role': 'user', 'content': [
         {'type': 'text', 'text': OCR_PROMPT},

@@ -51,8 +51,8 @@ export const pinnedNotes = computed(() =>
 
 // ─── 初始化 ────────────────────────────────────────
 export async function initStore() {
-  const [ns, ts] = await Promise.all([db.listNotes(), db.listTags()])
-  for (const n of ns) n.atts = await db.attsOf(n.id)
+  const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
+  for (const n of ns) n.atts = byNote.get(n.id) ?? []
   notes.value = ns
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
@@ -61,20 +61,51 @@ export async function initStore() {
   settings.lang = (await db.kvGet<string>('lang')) ?? 'zh-CN'
   settings.selfieMirror = (await db.kvGet<boolean>('selfieMirror')) ?? true
   await refreshPending()
-  onSyncChanged(reload)
+  onSyncChanged(patchFromSync)
   ready.value = true
 }
 
 export async function reload() {
-  const ns = await db.listNotes()
-  for (const n of ns) n.atts = await db.attsOf(n.id)
+  const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
+  for (const n of ns) n.atts = byNote.get(n.id) ?? []
   notes.value = ns
-  tags.value = await db.listTags()
+  tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
   // 同步可能带来别处置顶的笔记：补一条置顶时刻，避免排序退化成 0
   for (const n of ns) if (n.pinned && !pinOrder[n.id]) pinOrder[n.id] = n.updatedAt || n.createdAt
   // 媒体组件观察附件元数据，自行更新展示来源。
   await refreshPending()
+}
+
+/** 单条上限：超过就退回整表重载，避免异常情况下串行读放大成 N+1 */
+const PATCH_LIMIT = 40
+
+/** 同步回调：有受影响 id 时只重读这几条笔记（自动保存后走这里），
+ *  没有 id（全量对账 / 升级修复）才整表重载。 */
+async function patchFromSync(ids?: string[]) {
+  if (!ids) { await reload(); return }
+  await refreshPending()
+  if (!ids.length) return
+  if (ids.length > PATCH_LIMIT) { await reload(); return }
+
+  let changed = false
+  for (const id of new Set(ids)) {
+    const fresh = await db.getNote(id)
+    const i = notes.value.findIndex(n => n.id === id)
+    if (!fresh || fresh.deleted) {
+      if (i >= 0) { notes.value.splice(i, 1); index.remove(id) }
+      continue
+    }
+    const atts = await db.attsOf(id)
+    fresh.atts = atts
+    if (i >= 0) notes.value[i] = fresh
+    else notes.value.push(fresh)
+    index.upsert(fresh, atts)
+    if (fresh.pinned && !pinOrder[fresh.id]) pinOrder[fresh.id] = fresh.updatedAt || fresh.createdAt
+    changed = true
+  }
+  // 标签可能随同步落库（其他设备新增），随受影响笔记一起刷新
+  if (changed) tags.value = await db.listTags()
 }
 
 // ─── 笔记 CRUD ─────────────────────────────────────

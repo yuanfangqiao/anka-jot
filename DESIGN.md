@@ -324,14 +324,14 @@ server/
 | method | args | 返回 | 说明 |
 |---|---|---|---|
 | `snapshot` | `{sinceRev?}` | `{notes,attachments,tags,serverRev}` | 对账拉取（全量/增量） |
-| `upsert_note` | `{note}` | `{ok,serverRev}` | 含附件元数据数组；LWW 合并 |
+| `upsert_note` | `{note, atts?, removedAtts?}` | `{ok,serverRev}` | LWW 合并；`atts` 按 id 增量 upsert（不隐式删除），删除必须走 `removedAtts` |
 | `delete_note` | `{id}` | `{ok}` | tombstone |
 | `list_tags` | `{}` | `{tags:[{name,color,pinned,count}]}` | |
 | `upload_begin` | `{attId,kind,mime,size,sha256,thumbB64?}` | `{ok,exists?,path?,thumbPath?,thumbnailError?}` | 秒传也返回/修复小图路径 |
 | `upload_chunk` | `{attId,seq,b64}` | `{ok,received}` | 单块 ≤1MB(base64 后 ~1.37MB，HTTP JSON 无 256KB 限制) |
 | `upload_end` | `{attId,thumbB64?}` | `{ok,path,thumbPath,thumbnailError?}` | 校验并落盘；接收前端小图或 FFmpeg 补生成；失败保留原文件 |
 | `ensure_thumbnail` | `{attId,thumbB64?,force?}` | `{ok,path,thumbPath}` | 小图单独补传/历史补生成，force 修复损坏封面；不重复上传原文件 |
-| `ocr_image` | `{attId}` | `{ok,text}` | 服务端读文件→data URL→`ctx.llm.stream` 视觉模型 |
+| `ocr_image` | `{attId}` | `{ok,text}` | 服务端经 `MediaStore.resolve_media` 校验路径后读文件→data URL→`ctx.llm.stream` 视觉模型 |
 | `transcribe` | `{attId,lang?}` | `{ok,segments?}` 或 `{ok:false,reason:'no_adapter'}` | 预留：未来注册 whisper 适配器即开通 |
 | `summarize` | `{scope:{noteId?/from,to?/tag?}}` | `{ok,markdown}` | 组装笔记文本+OCR+转写 → `ctx.llm` |
 | `extract_todos` | `{noteId}` | `{ok,todos:[{text,due?}]}` | |

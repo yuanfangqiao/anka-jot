@@ -23,8 +23,9 @@ export const syncState = reactive({
 })
 
 let pushing: Promise<void> | null = null
-let onChanged: (() => void | Promise<void>) | null = null
-export function onSyncChanged(fn: () => void | Promise<void>) { onChanged = fn }
+/** 回调携带本次受影响的笔记 id：上层据此只重读这几条；不传 = 需要整表对账 */
+let onChanged: ((ids?: string[]) => void | Promise<void>) | null = null
+export function onSyncChanged(fn: (ids?: string[]) => void | Promise<void>) { onChanged = fn }
 
 export async function refreshPending() {
   syncState.pending = await db.outboxCount()
@@ -96,13 +97,14 @@ async function drainOutbox(): Promise<void> {
   syncState.syncing = true
   let changed = false
   let failed = false
+  const dirty = new Set<string>() // 本次推送真正写到的笔记
   try {
     const items = await db.outboxAll()
     for (const it of items) {
       try {
         if (it.type === 'note.upsert' && it.noteId) {
           const note = await db.getNote(it.noteId)
-          if (!note) { await db.outboxDrop(it.seq!); changed = true; continue }
+          if (!note) { await db.outboxDrop(it.seq!); changed = true; dirty.add(it.noteId); continue }
           const atts = await db.attsOf(note.id)
           for (const a of atts) {
             if (!a.serverPath) {
@@ -113,7 +115,7 @@ async function drainOutbox(): Promise<void> {
           }
           const fresh = await db.attsOf(note.id)
           const r = await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })
-          if (r?.applied) await markSynced(note, r.serverRev)
+          if (r?.applied) { await markSynced(note, r.serverRev); dirty.add(note.id) }
           else {
             if (r?.note) await db.putHistory(r.note)
             const latest = await db.getNote(note.id)
@@ -122,6 +124,7 @@ async function drainOutbox(): Promise<void> {
           }
         } else if (it.type === 'note.delete' && it.noteId) {
           await callJot('delete_note', { id: it.noteId })
+          dirty.add(it.noteId)
         } else if (it.type === 'tag.upsert' && it.name) {
           const tags = await db.listTags()
           const t = tags.find(x => x.name === it.name)
@@ -150,7 +153,8 @@ async function drainOutbox(): Promise<void> {
     syncState.syncing = false
     await refreshPending()
     if (syncState.pending === 0) syncState.lastError = '' // 队列排空即清除残留错误
-    if (changed) await onChanged?.() // 仅在队列确有变化时刷新 UI，避免每 60s 全量重渲染
+    // 只回报写到的笔记：上层按 id 增量 patch，不再每次自动保存都整表重载
+    if (changed) await onChanged?.([...dirty])
   }
 }
 
@@ -174,11 +178,12 @@ async function markSynced(sent: JotNote, serverRev?: number) {
 export async function pullMerge(full = false): Promise<number> {
   let since = full ? 0 : (await db.kvGet<number>('lastPullRev')) ?? 0
   let applied = 0
+  const dirty = new Set<string>() // 本次拉取真正改到的笔记
   for (let page = 0; page < 50; page++) {
     const snap = await callJot('snapshot', { sinceRev: since, limit: 500 })
     for (const sn of snap.notes ?? []) {
       const local = await db.getNote(sn.id)
-      if (local && await mergeMediaPaths(sn)) applied++
+      if (local && await mergeMediaPaths(sn)) { applied++; dirty.add(sn.id) }
       // 本地有未推送编辑：服务端版本不覆盖，避免丢本地改动（服务端版本留档兜底）
       if (local && local.syncState === 'local') {
         await db.putHistory({ ...sn })
@@ -187,11 +192,13 @@ export async function pullMerge(full = false): Promise<number> {
       if (local && sn.rev < (local.rev ?? 0)) continue
       const note: JotNote = { ...sn, syncState: 'synced' }
       await db.saveNote(note, false)
-      // 附件差集：服务端已没有的本地附件（及 blob）删除，防孤儿数据
+      dirty.add(sn.id)
       const localAtts = await db.attsOf(sn.id)
-      const serverIds = new Set((sn.atts ?? []).map(a => a.id))
-      for (const a of localAtts) if (!serverIds.has(a.id)) await db.delAtt(a.id)
-      for (const a of sn.atts ?? []) {
+      // 只有笔记确实被删除才清附件。服务端对附件是「按 id 增量写、不隐式删」，
+      // 因此「服务端快照里没有」不代表附件被删（旧客户端 / 并发覆盖都会误判），
+      // 按差集删本地会连带 blob 一起丢，双设备下必现。
+      if (sn.deleted) for (const a of localAtts) await db.delAtt(a.id)
+      else for (const a of sn.atts ?? []) {
         const previous = localAtts.find(old => old.id === a.id && old.sha256 === a.sha256)
         await db.putAtt({ ...a, serverPath: a.serverPath || previous?.serverPath,
           thumbPath: a.thumbPath || previous?.thumbPath })
@@ -204,7 +211,7 @@ export async function pullMerge(full = false): Promise<number> {
     syncState.lastPullRev = since
     if (!snap.hasMore) break
   }
-  if (applied) await onChanged?.()
+  if (applied) await onChanged?.([...dirty])
   return applied
 }
 

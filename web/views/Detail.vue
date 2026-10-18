@@ -8,7 +8,7 @@ import { callJot, mediaUrl, toast, useUi, type JotAtt, type JotNote, type Seg } 
 import { pop, push } from '../lib/nav'
 import { fmtTime } from '../lib/format'
 import {
-  ensureTag, flushSave, newNote, removeNote,
+  captureLocation, ensureTag, flushSave, newNote, removeNote,
   saveDebounced, setActiveNote, tagColor, tags, toggleFav, togglePin, updateAtt,
 } from '../state/store'
 import { usePicker } from '../state/picker'
@@ -48,6 +48,8 @@ onMounted(async () => {
     atts.value = await db.attsOf(n.id)
   } else if (props.fresh) {
     note.value = newNote('text'); note.value.id = props.id
+    // 位置写进本对象：空笔记的 persist 会被跳过，但用户一打字就随正文一起落库
+    captureLocation(note.value)
     hydrateTodos('')
   } else { pop(); return }
   setActiveNote(note.value)

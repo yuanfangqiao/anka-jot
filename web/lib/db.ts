@@ -105,7 +105,7 @@ export async function putAtt(a: JotAtt) {
   const d = await open()
   const t = d.transaction(T.atts, 'readwrite'); t.objectStore(T.atts).put(plain(a)); await done(t)
 }
-/** 删除单个附件及其 blob（拉取时清理服务端已删的附件） */
+/** 删除单个附件及其 blob（仅笔记被删除时清理，拉取不再隐式删附件） */
 export async function delAtt(attId: string) {
   const d = await open()
   const t = d.transaction([T.atts, T.blobs], 'readwrite')
@@ -118,6 +118,19 @@ export async function attsOf(noteId: string): Promise<JotAtt[]> {
   const d = await open()
   const r = await req<JotAtt[]>(d.transaction(T.atts).objectStore(T.atts).index('noteId').getAll(noteId))
   return r.sort((a, b) => a.createdAt - b.createdAt)
+}
+/** 全量附件按 noteId 分组：列表初始化一次读完，避免每篇笔记一次 attsOf（N+1） */
+export async function attsByNote(): Promise<Map<string, JotAtt[]>> {
+  const d = await open()
+  const all = await req<JotAtt[]>(d.transaction(T.atts).objectStore(T.atts).getAll())
+  const map = new Map<string, JotAtt[]>()
+  for (const a of all) {
+    const list = map.get(a.noteId)
+    if (list) list.push(a)
+    else map.set(a.noteId, [a])
+  }
+  for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
+  return map
 }
 export async function allAtts(): Promise<JotAtt[]> {
   const d = await open()

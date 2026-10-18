@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修复（2026-10-18 P0 六项：数据一致性与资源生命周期）
+- **录音页卸载丢录音**：`onUnmounted` 只 `rec.stop()` 不落库，切 tab / 重置导航栈会静默丢掉整段录音。抽出 `doStop()` 统一「停止 → 建笔记 → 附件落库 → 持久化」，按钮与卸载共享同一次停止（`finishing`），卸载路径也走完整落库。
+- **自动保存后整表重载**：`persist → pushOutbox → onChanged → reload` 原本每次都全表替换 `notes` 并逐条 `attsOf`。同步回调改为回报受影响的 note id，`store.patchFromSync()` 只重读这几条（>40 条或全量对账才退回 `reload`）；新增 `db.attsByNote()` 一次读全量附件分组，初始化/重载不再 N+1。
+- **新建文本笔记丢位置**：`App.vue` 建了对象 A 采集定位，`Detail.vue` 又用同 id 新建对象 B，A 因空笔记从不落库。现在只传 id，定位由 `Detail` 在真正会被保存的 `note` 对象上采集。
+- **OCR 路径穿越**：`ai.ocr_image` 直接 `data_dir.parent / att.serverPath` 读盘（该字段可由客户端写库），构成任意文件读取并把内容发往云端模型。新增 `MediaStore.resolve_media()` 作为唯一读盘入口（`data/media` 白名单 + `is_file`），`ocr_image` 只接受已校验的绝对路径。
+- **附件被全量替换**：`store.upsert_note` 命中 LWW 时 `DELETE` 全部附件行再插入客户端列表，客户端拉取又按「服务端没有」删本地附件与 blob，双设备下会丢 OCR / 转写 / 波形元数据。服务端改为按 `att.id` 增量 upsert，删除只认显式 `removedAtts`；客户端只在笔记被删除时清理附件。
+- **相机切原生不停流**：`useNative()` 未停止 `getUserMedia` 流，指示灯常亮且系统相机可能抢不到摄像头。切换前 `stop` 所有 track 并清空 `stream`。
+
 ### 修复 / 变更（2026-10-18 首页置顶横滑条）
 - 首页「全部 / 收藏 / 标签」筛选行被压成一条短横：滚动区为纵向 flex 容器，该行带 `overflow-x-auto`，其自动最小高度按规范归零，负自由空间全部压在它身上再被自身裁切。修复为收纳进搜索框右侧筛选按钮（底部弹层选 全部 / 收藏 / 标签 + 清除），并在 `.jot-search-row` / `.jot-shelf` 上显式 `flex: 0 0 auto`，不再依赖宿主是否构建 `shrink-0`。
 - 新增置顶横滑条：位于搜索框与「今日」之间，复用 `NoteCard`，一屏并排 5 个、宽度自适应、可左右滑动查看全部置顶；条带高度按图片卡 3:4，窄卡内隐藏脚注/二级摘要并收紧字号。原「置顶」N 列瀑布流区与 `pinnedCols` 删除，置顶内容只出现一次。
