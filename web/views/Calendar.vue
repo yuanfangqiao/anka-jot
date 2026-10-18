@@ -226,17 +226,18 @@ watch(() => syncState.pending, (nowPending, before) => {
         <span v-for="(c, i) in cells" :key="i" class="jot-cal-cell">
           <button
             v-if="c" type="button"
-            class="flex h-full w-full cursor-pointer flex-col items-center justify-center rounded-xl jot-fs-13 transition-colors"
+            class="jot-cal-day cursor-pointer rounded-xl jot-fs-13 transition-colors"
             :class="sameDay(c.ms, selected) ? 'bg-brand font-semibold text-white' : 'text-ink-1 hover:bg-glass'"
             @click="selectDay(c.ms)"
           >
             {{ c.day }}
-            <span class="flex h-1 gap-0.5">
-              <span
-                v-for="(_, k) in Math.min(3, countOf(c.ms))" :key="k"
-                class="h-1 w-1 rounded-full"
-                :class="sameDay(c.ms, selected) ? 'bg-white/90' : 'bg-brand'"
-              />
+            <!-- 打点走语义类：尺寸/间距/配色不依赖宿主是否构建 h-1/w-1/gap-0.5/bg-white -->
+            <span
+              v-if="countOf(c.ms)"
+              class="jot-cal-dots"
+              :class="{ 'is-sel': sameDay(c.ms, selected) }"
+            >
+              <span v-for="(_, k) in Math.min(3, countOf(c.ms))" :key="k" class="jot-cal-dot" />
             </span>
           </button>
         </span>
@@ -277,7 +278,7 @@ watch(() => syncState.pending, (nowPending, before) => {
     <div v-else class="relative flex flex-col gap-3 pl-5">
       <span v-if="dayNotes.length" class="jot-rail bottom-2 top-2 w-px bg-line" />
       <div v-for="it in dayNotes" :key="it.card.id" class="relative">
-        <span class="jot-dot top-5 h-2 w-2 rounded-full border-2 border-bg-0 bg-brand" />
+        <span class="jot-dot" />
         <p class="mb-1 jot-fs-11 text-ink-2">{{ fmtClock(it.note.createdAt) }}</p>
         <!-- 与主页同款卡片；列表是服务端投影，只读（置顶角标与「⋯」不出现） -->
         <NoteCard :note="it.note" :show-day="false" :show-time="false" readonly @open="openNote(it.card)" />

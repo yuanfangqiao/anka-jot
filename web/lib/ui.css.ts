@@ -567,7 +567,30 @@ html[data-theme='dark'] .jot-bar-item-voice { --tile: #bb6a86; }
 
 /* ─── 日历时间轴定位（替代 left-[7px]/-left-[17.5px]/top-5） ─── */
 .jot-rail { position: absolute; left: 7px; top: 8px; bottom: 8px; width: 1px; }
-.jot-dot { position: absolute; left: -17.5px; top: 1.25rem; }
+/* 时间轴圆点：尺寸/描边/配色一并写死，宿主部署 CSS 缺 h-2/w-2/rounded-full 时会退化成 0×0 */
+.jot-dot {
+  position: absolute; left: -17.5px; top: 1.25rem;
+  width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--primary); border: 2px solid var(--bg-0);
+}
+
+/* 日期按钮：flex 纵排居中写进语义类（宿主部署 CSS 无 flex-col/items-center 时文字与点会并排） */
+.jot-cal-day {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+}
+
+/* ─── 月历日期打点：同样不依赖 h-1/w-1/gap-0.5/bg-white/90 等插件侧工具类 ─── */
+.jot-cal-dots {
+  display: flex; flex: none; justify-content: center;
+  gap: 3px; height: 4px; margin: 2px auto 0; line-height: 0;
+}
+.jot-cal-dot {
+  display: block; width: 4px; height: 4px;
+  border-radius: 9999px; background: var(--primary);
+}
+.jot-cal-dots.is-sel .jot-cal-dot { background: #fff; opacity: 0.92; }
 
 /* ─── 日历远端数据源的状态：翻月钮 / 说明行 / 角标 / 重试 / 骨架 ─── */
 .jot-cal-nav {

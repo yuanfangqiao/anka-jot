@@ -13,7 +13,7 @@ export async function setup(uiCtx: UiLike) {
   uiCtx.registerApp({
     id: 'anka-jot',
     title: '即刻',
-    icon: 'notebook-pen',
+    icon: 'zap',
     route: '/anka-jot',
     component: App,
     order: 10,

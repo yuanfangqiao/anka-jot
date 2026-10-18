@@ -2,7 +2,7 @@
   "id": "anka-jot",
   "name": "即刻 Jot",
   "version": "0.1.0",
-  "icon": "notebook-pen",
+  "icon": "zap",
   "description": "PWA 多媒体速记：打开即记、拍完即存、说完出字、事后好找。文字/拍照/相册/语音四入口，离线优先，OCR 与语音转写，全文搜索。",
   "backend": { "entry": "server/main.py" },
   "ui": { "entry": "web/index.ts", "dock": { "order": 10 }, "route": "/jot", "sidebar": true }

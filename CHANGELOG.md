@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 修复（2026-10-18 iOS 月历日期打点不显示）
+- **现象**：iOS 真机上月历日期下方完全没有小圆点（桌面端正常），当日条数、时间轴卡片都正常。
+- **根因**：打点用的是纯工具类 `flex h-1 gap-0.5` + `h-1 w-1 rounded-full` + `bg-white/90`。宿主**部署构建**的 CSS 里不含插件侧才会用到的类（与 10-17「grid-cols-7 缺失导致单列」同源），`sapn` 尺寸类缺失后打点退化成 0×0，DOM 里有节点但看不见；日期按钮的 `flex-col / items-center / justify-center` 同样可能缺失（文字居中靠的是 `.jot-cal-grid` 继承的 `text-align`）。
+- **修法**：打点与日期按钮改为插件自带的语义类，样式全部落在 `ui.css.ts`（运行时随插件注入，不经宿主 Tailwind，天然免疫该问题）：
+  - `.jot-cal-dots` / `.jot-cal-dot` / `.jot-cal-dots.is-sel`：显式 `width/height 4px`、`gap 3px`、`border-radius`、`background: var(--primary)`，选中日改白点；
+  - `.jot-cal-day`：显式 `flex column + center` + `100% × 100%`，去掉对 `flex-col/items-center/justify-center/h-full/w-full` 的依赖；
+  - `.jot-dot`（时间轴左侧圆点）同样补上 `8px` 尺寸、`2px` 描边与主色底，此前只写了定位。
+- **顺带**：无记录的日期不再渲染 4px 空行（改 `v-if="countOf(c.ms)"`），数字回到格子正中；有记录时数字+打点整体居中。
+- **验证**：`node web/scripts/build-plugin.mjs anka-jot` 重新编译插件产物（`.plugin-dist/anka-jot/index.js`，含新类）；无头 Chrome 按同一份 CSS 渲染 7 列网格截图，确认 1/2/3 点与选中日白点均可见；`@vue/compiler-sfc` 编译 `Calendar.vue` 通过，lint 无报错。
+
 ### 修复（2026-10-18 0 字节录音附件让 outbox 永久 400「文件大小非法: 0」）
 - **现象**：`upload_begin` 400，`size: 0`、`sha256: e3b0c442…`（空串的哈希），`drainOutbox` 每次心跳与日历进入都重试同一条 `note.upsert`，队列永远排不空。
 - **根因**：录音结束时 `MediaRecorder` 没产出任何分片（iOS 音频会话失效 / 起录即停），`attachAudio` 照旧把 0 字节 blob 落库；服务端 `upload_begin` 校验 `size>0` 恒定拒绝，本地这条笔记又没有别的上传路径。
