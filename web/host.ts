@@ -61,6 +61,9 @@ export interface JotNote {
   todos?: JotTodo[]
   color: string | null; location: { lat: number; lng: number; name?: string } | null
   deleted: boolean; rev: number
+  /** Last acknowledged server content, retained across offline edits. */
+  syncBase?: JotNote
+  mutationId?: string
   syncState?: 'local' | 'syncing' | 'synced'
   atts?: JotAtt[]
 }
@@ -78,7 +81,7 @@ function _argDigest(args: Record<string, unknown>): string {
 
 export async function callJot<T = any>(method: string, args: Record<string, unknown> = {}): Promise<T> {
   // 只约束同步请求；AI/OCR 等长任务保持原行为。
-  const bounded = /^(snapshot|stats|ensure_thumbnail|upload_.*|upsert_note|delete_note|upsert_tag|calendar_counts|notes_by_day|get_note)$/.test(method)
+  const bounded = /^(snapshot|stats|ensure_thumbnail|upload_.*|upsert_note|delete_note|upsert_tag|calendar_counts|notes_by_day|note_history|get_note)$/.test(method)
   const controller = new AbortController()
   const timer = bounded ? setTimeout(() => controller.abort(), 60_000) : null
   try {

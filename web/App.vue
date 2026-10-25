@@ -19,14 +19,17 @@ import Favs from './views/Favs.vue'
 import Discover from './views/Discover.vue'
 import Search from './views/Search.vue'
 import Settings from './views/Settings.vue'
+import { todoUndo, todoBusy, undoCardTodo } from './state/todoActions'
 import CardMenu from './components/CardMenu.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import { usePasteCapture } from './state/paste'
 
 const ui = useUi()
 const icons = ui.icons
 
 /** 调色板跟随宿主主题：浅色宿主注入奶油色板，深色宿主跟随其 token（lib/theme.ts） */
 const rootEl = ref<HTMLElement>()
+usePasteCapture(rootEl, () => Boolean(menuNote.value || confirmReq.value) || ['camera', 'record'].includes(nav.current.view))
 onMounted(() => { if (rootEl.value) startThemeFollow(rootEl.value) })
 onBeforeUnmount(stopThemeFollow)
 
@@ -150,9 +153,15 @@ function onVideoChange(e: Event) {
     <!-- 主区 -->
     <main class="relative min-h-0 flex-1">
       <KeepAlive :include="['Home', 'Calendar', 'Todo', 'Favs']">
-        <component :is="curView" v-bind="curParams" @create="onPick" />
+        <component :is="curView" :key="nav.current.view === 'note' ? curParams.id : nav.current.view" v-bind="curParams" @create="onPick" />
       </KeepAlive>
     </main>
+
+    <div v-if="todoUndo" class="jot-undo-notice" role="status">
+      <span>已{{ todoUndo.after ? '完成' : '恢复' }}事项</span>
+      <button type="button" class="jot-card-undo" :disabled="todoBusy" @click="undoCardTodo">撤销</button>
+      <button type="button" aria-label="关闭撤销提示" @click="todoUndo = null">×</button>
+    </div>
 
     <!-- 卡片「⋯」快速菜单：App 级覆盖层，卡片自身 overflow 不会裁掉它 -->
     <CardMenu v-if="menuNote" />

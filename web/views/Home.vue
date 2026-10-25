@@ -1,4 +1,6 @@
 <script setup lang="ts">
+defineOptions({ name: 'Home' })
+import { useViewScroll } from '../lib/useViewScroll'
 /** Home — 屏①：搜索 + 筛选、置顶横滑条、时间线卡片流、底部细长五入口工具条。 */
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useUi, type JotNote } from '../host'
@@ -14,6 +16,7 @@ import { useColCount, splitCols } from '../lib/useColCount'
 const emit = defineEmits<{ create: [kind: 'text' | 'camera' | 'video' | 'album' | 'voice'] }>()
 const icons = useUi().icons
 const list = ref<HTMLElement | null>(null)
+useViewScroll(list)
 const { distance, refreshing, label } = usePullRefresh(list)
 
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
@@ -42,11 +45,11 @@ onActivated(() => nextTick(syncShelfEdge))
 
 /** 五入口：细长工具条；每格一个深色瓷贴（藏蓝/墨绿/靛紫/赭橙/酒红），样式见 jot-bar-item-* */
 const QUICK = [
-  { kind: 'text', icon: 'Type', label: '文本' },
+  { kind: 'text', icon: 'Type', label: '文字' },
   { kind: 'camera', icon: 'Camera', label: '拍照' },
-  { kind: 'video', icon: 'Video', label: '视频' },
+  { kind: 'video', icon: 'Video', label: '录像' },
   { kind: 'album', icon: 'Images', label: '相册' },
-  { kind: 'voice', icon: 'Mic', label: '语音' },
+  { kind: 'voice', icon: 'Mic', label: '录音' },
 ] as const
 
 function open(n: JotNote) { push('note', { id: n.id }) }
@@ -94,9 +97,9 @@ const grouped = computed(() => {
 </script>
 
 <template>
-  <div class="jot-container relative flex h-full flex-col pt-2">
+  <div class="jot-home">
     <!-- 滚动区（底部留白避让悬浮胶囊工具条） -->
-    <div ref="list" class="jot-refresh-list jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
+    <div ref="list" class="jot-container jot-refresh-list jot-scroll-pad flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
       <div v-if="distance || refreshing" class="jot-refresh-status" role="status"
         :style="{ height: distance + 'px', lineHeight: distance + 'px' }">{{ label }}</div>
       <!-- 搜索行：搜索框 + 筛选按钮（筛选收进底部弹层，首页更干净） -->
@@ -173,14 +176,14 @@ const grouped = computed(() => {
     />
     </div>
 
-    <!-- 四入口：通栏方块工具条（jot-bar* 语义类，不赌宿主构建）。
-         圆角方块瓷贴 + 玻璃底栏，与宿主胶囊 dock 形状区分 -->
+    <!-- 五入口：保留底部玻璃栏；电脑用紧凑图文按钮，手机保留圆形图标 -->
     <footer class="jot-bar-wrap">
-      <div class="jot-bar">
+      <div class="jot-bar jot-container">
         <button
           v-for="q in QUICK" :key="q.kind" type="button"
           class="jot-bar-item"
           :class="`jot-bar-item-${q.kind}`"
+          :aria-label="q.label" :title="q.label"
           @click="emit('create', q.kind)"
         >
           <span class="jot-bar-tile">

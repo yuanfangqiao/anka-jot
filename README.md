@@ -1,7 +1,7 @@
 # anka-jot
 
 即刻（Jot）— 离线优先的速记插件：打开即记、拍完即存、说完出字。
-文本 / 拍照 / 相册 / 语音四入口，按天分组的时间线瀑布流，增量同步到服务端。
+文字 / 拍照 / 录像 / 相册 / 录音五入口，支持粘贴即记；按天分组的时间线瀑布流，增量同步到服务端。
 
 ---
 
@@ -18,7 +18,7 @@ UI 读写 ──► IndexedDB（唯一事实源）
               ▼
         服务端 SQLite（plugin server）
               ▲
-        pullMerge()  snapshot(sinceRev) 增量拉取，rev 大者胜（笔记级 LWW）
+        pullMerge()  snapshot(sinceRev) 增量拉取；syncBase 三方字段合并与版本留档
 ```
 
 - **失败项保留**：失败先探活，服务端不可达则停推；单条失败跳过续推，计数最多 5，始终保留待同步项。
@@ -28,7 +28,7 @@ UI 读写 ──► IndexedDB（唯一事实源）
   未识别 mime 按 kind 兜底扩展名，不再判非法。
 - **媒体硬失败**：本地 blob/sha256 缺失时不上传该笔记，避免「缺媒体的笔记」同步上去。
 - **本地未推送编辑保护**：拉取时若本地 `syncState === 'local'`，服务端版本只进历史留档，不覆盖。
-- **触发时机**：`online` 事件 + `visibilitychange` 回前台 + 60s 前台心跳 + 手动（banner「同步」按钮，
+- **触发时机**：`online` 事件 + `visibilitychange` 回前台 + 3s 前台增量心跳 + 手动（banner「同步」按钮，
   结果 toast 反馈，失败原因直接显示在 banner 里）。
 - **恢复修复**：冷启动、pageshow、回前台、联网及手动下拉时全量核对附件路径；相同 rev 也补路径，保护本地正文与附件增删。普通心跳仍按增量同步。
 - **请求可恢复**：同步调用与媒体缓存下载 60 秒超时；需要宿主支持 callApp 第四参数 AbortSignal。
@@ -96,6 +96,15 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 
 ---
 
+## 编辑与并发保存（2026-10-25）
+
+- `state/paste.ts` 处理用户主动粘贴：当前应用非输入区域新建图文笔记；详情正文图片追加附件。只用 paste 事件的 clipboardData，不申请剪贴板读取权限；保存复用现有附件管线和 IDB + outbox。
+- 写入路径仍为 IDB + outbox；编辑器保留打开/确认时的基准，只合并实际修改字段。
+- 同源页面 BroadcastChannel 通知；独立设备前台 3 秒增量轮询。输入聚焦期间不替换正文，更新提示允许合并。
+- 详情「历史版本」合并本机与服务端版本，可恢复；冲突双方留档，mutationId 避免重试覆盖后续编辑。
+- `server/schema.py`、`server/note_writes.py` 分离表结构与原子写入；`state/persistence.ts` 管理草稿基准和保存队列；编辑控制逻辑在 `state/useDetail.ts`。
+- 语义 CSS 保持原顺序拆到 `ui.css.base0..3.ts`；本次修复样式在 `ui.css.edits.ts`，由 `ui.css.ts` 统一注入。
+
 ## `jot-` 语义类速查
 
 | 类 | 用途 |
@@ -103,15 +112,16 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-shutter` / `jot-shutter-inner` | 拍照快门 72px 圆钮 |
 | `jot-rec-btn` | 录音大按钮 |
 | `jot-card` | 笔记卡（圆角 + 发丝边框 + 分层柔影 + 按压反馈） |
-| `jot-container` | 主容器响应式宽度（手机满宽 / ≥768px / ≥1280px） |
+| `jot-home` / `jot-container` | 首页占满应用窗口，卡片滚动区与按钮组居中限宽；底栏背景不受内容最大宽度限制 |
 | `jot-clamp-2` / `jot-clamp-5` | 行截断（替代 line-clamp） |
-| `jot-cols` / `jot-col` | 手动瀑布流列 |
+| `jot-cols` / `jot-col` | 手动瀑布流：手机（<640px）2 列，平板/电脑（≥640px）统一 5 列 |
 | `jot-fs-*` / `jot-leading-145` | 任意值字号 / 行高 |
 | `jot-press` / `jot-press-strong` | 按压缩放反馈 |
 | `jot-wave` / `jot-wave-bar` | 波形条 |
 | `jot-voicebar*` | 语音气泡（播放钮 + 波形 + 时长） |
 | `jot-card-std` / `jot-card-text` | 主页标准卡容器（图片/复合 3:4 竖卡，纯文字 1:1 方卡） |
 | `jot-card-voice` / `jot-vc-*` | 主页语音小卡（64px 矮条语音条：整条点击播放/暂停，时间在右下角） |
+| `jot-text-cover` / `jot-cover-content` / `jot-cover-heading` / `jot-cover-body` | 适中字号文字封面，按剩余高度展示正文 |
 | `jot-textcard` / `jot-tc-*` | 文字语录彩卡（哈希取色 `--tc-bg` + 噪点防眩 + 居中排版，深色自动降明度） |
 | `jot-imgcard` / `jot-comp-img` / `jot-comp-body` | 图片卡满幅区 / 复合卡图区(56%)与文区 |
 | `jot-imgbadge` / `jot-comp-play` | 多图角标 / 复合卡迷你播放钮 |
@@ -119,7 +129,7 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-videocard` | 详情页视频块（16:9 海报，点击全屏播放） |
 | `jot-card-foot` | 卡片底部信息行（时间 + 同步点） |
 | `jot-fav-mini` / `jot-todo-mini` | 卡片脚注的收藏 / 待办小标志（琥珀）；详情顶栏同一色由组件内联 `var()` 上色 |
-| `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` | 首页通栏方块工具条（圆角方块瓷贴，与宿主胶囊 dock 区分） |
+| `jot-bar-wrap` / `jot-bar-item` / `jot-bar-tile` / `jot-bar-label` | 底部采集栏：平板/电脑 47px 紧凑图文按钮，手机圆形图标；桌面覆盖在 ui.css.desktop.ts |
 | `jot-date-sep` | 时间线日期分隔（双侧渐变细线 + 加粗标签） |
 | `jot-cover-missing` | 封面图加载失败渐变占位 |
 | `jot-media-preview` | 图片/视频 JPEG 缩略图填满卡片，接近视口时加载，缺失自动补图 |
@@ -131,6 +141,8 @@ Analyser 实时峰值采样并降采样到 200 点（详情页渲染波形零解
 | `jot-cal-chip` | 日历右上角小胶囊（待同步 / 离线 / 有更新） |
 | `jot-cal-retry` | 日历错误重试、加载更多按钮 |
 | `jot-cal-skel` | 日历首屏与续页骨架卡（含 `prefers-reduced-motion` 降级） |
+| `jot-update-notice` / `jot-history*` | 外部更新提示、历史列表与恢复 |
+| `jot-card-check` / `jot-card-undo` / `jot-undo-notice` | 卡片事项勾选与跨分组撤销提示 |
 | `jot-scan-*` | 扫描参考框 |
 
 ## Do / Don't
@@ -163,3 +175,18 @@ ANKA_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs ANKA_THUMB_SCREENSHOTS=/tmp
 
 浏览器回归需要 Chrome 和 Playwright，检查前端图片/视频小图、历史补图、秒传地址保留、
 列表零原文件请求、点击加载大图、恢复重试，并输出 390×844 / 1440×900 截图。
+
+## 并发与交互回归
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s plugins/anka-jot/tests -p 'test_*.py' -v
+node web/scripts/build-plugin.mjs anka-jot
+node plugins/anka-jot/tests/serve-interactions.mjs
+```
+
+最后一条启动 5184 端口的隔离环境，Python 使用临时 SQLite 数据库。分别打开
+`http://127.0.0.1:5184/anka-jot` 与 `http://localhost:5184/anka-jot` 可模拟独立本地缓存的两个客户端，
+无需登录、不访问真实 data/。顶栏「运行存储回归」显示断言结果；再检查同笔记互改、历史恢复、
+搜索返回、列表滚动、事项勾选/撤销，以及手机与电脑尺寸。粘贴回归覆盖文字、图片、混合内容、
+刷新保留、输入框原位粘贴及弹层保护。此隔离服务不实现媒体上传，只验证图片本机保存和展示，
+图片显示待同步属于测试环境边界。停止进程自动清理临时服务端数据库，浏览器端隔离来源的 IDB 保留。

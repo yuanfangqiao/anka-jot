@@ -146,8 +146,14 @@ class Jot(Service):
 
     # ─── 笔记 ───────────────────────────────────────
     def upsert_note(self, note: dict, atts: list | None = None,
-                    removedAtts: list | None = None):
+                    removedAtts: list | None = None, base: dict | None = None, mutationId: str | None = None):
+        if mutationId is not None and (not isinstance(mutationId, str) or not 1 <= len(mutationId) <= 80):
+            raise ValueError("mutationId 非法")
         note = _valid_note(note)
+        if base is not None:
+            if not isinstance(base, dict) or base.get("id") != note["id"]:
+                raise ValueError("base 非法")
+            base = _valid_note(dict(base))
         # atts=None → 不动服务端附件；显式 list → 按 id 增量 upsert（不隐式删除）。
         # 删除只认 removedAtts：兼容旧客户端的全量列表语义，避免过期列表抹掉新附件。
         if atts is not None:
@@ -162,16 +168,20 @@ class Jot(Service):
             atts = [{**a, **self.media.try_thumbnail(a['serverPath'], a['kind'])}
                     if a.get('serverPath') and a.get('kind') in ('image', 'video') and not a.get('thumbPath')
                     else a for a in atts]
-        final, applied = self.store.upsert_note(note, atts, removedAtts)
+        final, applied = self.store.upsert_note(note, atts, removedAtts, base, mutationId)
         log.info('upsert_note 落库: id=%s rev=%s applied=%s',
                  final['id'], final['rev'], applied)
-        return {'note': final, 'applied': applied, 'serverRev': final['rev']}
+        return {'conflicts': final.pop('_conflicts', []),
+                'note': final, 'applied': applied, 'serverRev': final['rev']}
 
     def get_note(self, id: str):
         note = self.store.get_note(str(id))
         if note is None:
             raise ValueError('笔记不存在')
         return note
+
+    def note_history(self, id: str):
+        return self.store.note_history(str(id))
 
     def delete_note(self, id: str):
         return {'deleted': self.store.delete_note(str(id))}

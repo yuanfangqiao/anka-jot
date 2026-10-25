@@ -9,6 +9,8 @@ import { processVideo } from '../lib/video'
 import { SearchIndex } from '../lib/search'
 import { normalizeNoteTodos } from '../lib/todos'
 import { refreshPending, onSyncChanged, pushOutbox } from '../lib/sync'
+import { activeNote, cancelSave, persist, trackNote } from './persistence'
+import { listenNotes, startNoteEvents } from '../lib/noteEvents'
 
 export const index = new SearchIndex()
 
@@ -60,11 +62,14 @@ async function migrateLegacyTodos(ns: JotNote[]) {
   void pushOutbox()
 }
 
+let stopListening: (() => void) | undefined
+export function stopStore() { stopListening?.(); stopListening = undefined }
+
 export async function initStore() {
   const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
   for (const n of ns) n.atts = byNote.get(n.id) ?? []
   await migrateLegacyTodos(ns)
-  notes.value = ns
+  notes.value = ns.map(n => trackNote(n))
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
   await loadPinOrder()
@@ -73,6 +78,9 @@ export async function initStore() {
   settings.selfieMirror = (await db.kvGet<boolean>('selfieMirror')) ?? true
   await refreshPending()
   onSyncChanged(patchFromSync)
+  startNoteEvents()
+  stopListening?.()
+  stopListening = listenNotes(patchFromSync)
   ready.value = true
 }
 
@@ -80,7 +88,7 @@ export async function reload() {
   const [ns, ts, byNote] = await Promise.all([db.listNotes(), db.listTags(), db.attsByNote()])
   for (const n of ns) n.atts = byNote.get(n.id) ?? []
   await migrateLegacyTodos(ns)
-  notes.value = ns
+  notes.value = ns.map(n => trackNote(n))
   tags.value = ts
   for (const n of ns) index.upsert(n, n.atts ?? [])
   // 同步可能带来别处置顶的笔记：补一条置顶时刻，避免排序退化成 0
@@ -110,8 +118,8 @@ async function patchFromSync(ids?: string[]) {
     }
     const atts = await db.attsOf(id)
     fresh.atts = atts
-    if (i >= 0) notes.value[i] = fresh
-    else notes.value.push(fresh)
+    if (i >= 0) notes.value[i] = trackNote(fresh)
+    else notes.value.push(trackNote(fresh))
     index.upsert(fresh, atts)
     if (fresh.pinned && !pinOrder[fresh.id]) pinOrder[fresh.id] = fresh.updatedAt || fresh.createdAt
     changed = true
@@ -126,64 +134,21 @@ export function adoptRemoteNote(note: JotNote) {
   const i = notes.value.findIndex(n => n.id === note.id)
   if (i >= 0) notes.value[i] = note
   else notes.value.push(note)
+  trackNote(note)
   index.upsert(note, note.atts ?? [])
 }
 
 // ─── 笔记 CRUD ─────────────────────────────────────
 export function newNote(source: JotNote['source'] = 'text'): JotNote {
-  return {
+  return trackNote({
     id: crypto.randomUUID(), title: '', text: '', tags: [], source,
     createdAt: Date.now(), updatedAt: Date.now(), pinned: false, fav: false,
     todo: false, todos: [],
     color: null, location: null, deleted: false, rev: 0, syncState: 'local', atts: [],
-  }
+  })
 }
 
-/** 当前正在编辑的笔记（Detail 注册）：touchNote 合并其未保存内容，避免把编辑器新文字存回旧版 */
-export const activeNote = ref<JotNote | null>(null)
-export function setActiveNote(n: JotNote | null) { activeNote.value = n }
-
-let saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-/** 500ms 防抖自动存（按笔记分桶，避免多笔记互相清掉定时器丢编辑）；空笔记不入库 */
-export function saveDebounced(note: JotNote, immediate = false) {
-  const id = note.id
-  const old = saveTimers.get(id)
-  if (old) clearTimeout(old)
-  if (immediate) {
-    saveTimers.delete(id)
-    void persist(note)
-    return
-  }
-  saveTimers.set(id, setTimeout(() => { saveTimers.delete(id); void persist(note) }, 500))
-}
-/** 立即冲刷该笔记的防抖保存（页面卸载/切换前调用） */
-export async function flushSave(note: JotNote) {
-  const t = saveTimers.get(note.id)
-  if (t) { clearTimeout(t); saveTimers.delete(note.id) }
-  await persist(note)
-}
-/** 取消该笔记尚未执行的保存（删除时调用，防止残留定时器把笔记复活） */
-export function cancelSave(noteId: string) {
-  const t = saveTimers.get(noteId)
-  if (t) { clearTimeout(t); saveTimers.delete(noteId) }
-}
-
-async function persist(note: JotNote) {
-  const atts = await db.attsOf(note.id)
-  // 纯清单笔记（无标题/正文/附件）必须留下；只点亮待办标志的笔记也算有内容
-  const hasTodos = (note.todos ?? []).some(t => t.text.trim()) || note.todo === true
-  const empty = !note.title.trim() && !note.text.trim() && !hasTodos && atts.length === 0
-  if (empty || note.deleted) return
-  // 克隆后再写，避免原地改调用方（Detail）对象的 rev/syncState 引发意外 UI 变更
-  const next: JotNote = { ...note, atts, updatedAt: Date.now(), syncState: 'local' }
-  await db.saveNote(next, true)
-  const i = notes.value.findIndex(n => n.id === next.id)
-  if (i >= 0) { notes.value[i] = { ...next } } else { notes.value.push({ ...next }) }
-  index.upsert(next, atts)
-  for (const t of next.tags) await ensureTag(t)
-  void pushOutbox()
-  await refreshPending()
-}
+export { activeNote, setActiveNote, saveDebounced, flushSave, cancelSave } from './persistence'
 
 /** 置顶/取消置顶。返回是否真的落库（满额被拒时 false，调用方不要提示「已置顶」）。 */
 export async function togglePin(note: JotNote): Promise<boolean> {
@@ -274,6 +239,7 @@ export async function attachVideo(noteId: string, blob: Blob): Promise<JotAtt> {
 
 async function touchNote(noteId: string) {
   let n = await db.getNote(noteId)
+  if (n) trackNote(n)
   const live = activeNote.value
   if (live && live.id === noteId) {
     // 编辑器有未保存内容：以其标题/正文/标签/事项为准（atts 以刚写入 DB 的为准）
@@ -283,15 +249,7 @@ async function touchNote(noteId: string) {
     n = notes.value.find(x => x.id === noteId) ?? null
   }
   if (!n) return
-  n.updatedAt = Date.now()
-  n.syncState = 'local'
-  n.atts = await db.attsOf(noteId)
-  await db.saveNote(n, true)
-  const i = notes.value.findIndex(x => x.id === noteId)
-  if (i >= 0) { notes.value[i] = { ...n } }
-  index.upsert(n, n.atts)
-  await refreshPending()
-  void pushOutbox()
+  await persist(live?.id === noteId ? live : n, true)
 }
 
 export async function updateAtt(att: JotAtt) {

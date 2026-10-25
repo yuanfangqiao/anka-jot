@@ -1,58 +1,7 @@
-/** db.ts — IndexedDB 轻封装：设备端事实源（jot-db v1）。零依赖手写。 */
 import type { JotAtt, JotNote, JotTag } from '../host'
-
-const DB = 'jot-db'
-const VER = 1
-export const T = { notes: 'notes', atts: 'atts', blobs: 'blobs', tags: 'tags', outbox: 'outbox', kv: 'kv', history: 'history' } as const
-
-let dbp: Promise<IDBDatabase> | null = null
-
-function open(): Promise<IDBDatabase> {
-  dbp ??= new Promise((res, rej) => {
-    const rq = indexedDB.open(DB, VER)
-    rq.onupgradeneeded = () => {
-      const d = rq.result
-      if (!d.objectStoreNames.contains(T.notes)) {
-        const s = d.createObjectStore(T.notes, { keyPath: 'id' })
-        s.createIndex('updatedAt', 'updatedAt'); s.createIndex('createdAt', 'createdAt')
-      }
-      if (!d.objectStoreNames.contains(T.atts)) {
-        const s = d.createObjectStore(T.atts, { keyPath: 'id' }); s.createIndex('noteId', 'noteId')
-      }
-      if (!d.objectStoreNames.contains(T.blobs)) d.createObjectStore(T.blobs, { keyPath: 'key' })
-      if (!d.objectStoreNames.contains(T.tags)) d.createObjectStore(T.tags, { keyPath: 'name' })
-      if (!d.objectStoreNames.contains(T.outbox)) d.createObjectStore(T.outbox, { keyPath: 'seq', autoIncrement: true })
-      if (!d.objectStoreNames.contains(T.kv)) d.createObjectStore(T.kv, { keyPath: 'k' })
-      if (!d.objectStoreNames.contains(T.history)) {
-        const s = d.createObjectStore(T.history, { keyPath: 'hid', autoIncrement: true })
-        s.createIndex('noteId', 'noteId')
-      }
-    }
-    rq.onsuccess = () => {
-      const connection = rq.result
-      connection.onclose = () => { dbp = null }
-      connection.onversionchange = () => { connection.close(); dbp = null }
-      res(connection)
-    }
-    rq.onerror = () => { dbp = null; rej(rq.error) } // 打开失败不缓存，允许后续重试
-  })
-  return dbp
-}
-
-function tx(d: IDBDatabase, stores: string[], mode: IDBTransactionMode): Promise<IDBTransaction> {
-  return Promise.resolve(d.transaction(stores, mode))
-}
-function req<T>(r: IDBRequest<T>): Promise<T> {
-  return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
-}
-function done(t: IDBTransaction): Promise<void> {
-  return new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = () => rej(t.error) })
-}
-
-/** Vue 响应式 Proxy 无法被 IndexedDB 结构化克隆（DataCloneError），入库前还原为纯对象 */
-function plain<T>(o: T): T {
-  return JSON.parse(JSON.stringify(o))
-}
+import { open, T, req, done, plain } from './database'
+export { T } from './database'
+export * from './dbNotes'
 
 // ─── kv ────────────────────────────────────────────
 export async function kvGet<T>(k: string): Promise<T | null> {
@@ -64,49 +13,6 @@ export async function kvSet(k: string, v: unknown) {
   const d = await open()
   const t = d.transaction(T.kv, 'readwrite')
   t.objectStore(T.kv).put({ k, v })
-  await done(t)
-}
-
-// ─── notes ─────────────────────────────────────────
-export async function listNotes(includeDeleted = false): Promise<JotNote[]> {
-  const d = await open()
-  const all = await req<JotNote[]>(d.transaction(T.notes).objectStore(T.notes).getAll())
-  return all.filter(n => includeDeleted || !n.deleted)
-}
-export async function getNote(id: string): Promise<JotNote | null> {
-  const d = await open()
-  return (await req<JotNote | undefined>(d.transaction(T.notes).objectStore(T.notes).get(id))) ?? null
-}
-/** 批量写笔记 + outbox 追加，同一事务（迁移/整表修复用，避免逐条事务放大） */
-export async function saveNotes(list: JotNote[], queueSync = true) {
-  if (!list.length) return
-  const d = await open()
-  const t = await tx(d, [T.notes, T.outbox], 'readwrite')
-  const store = t.objectStore(T.notes)
-  const outbox = t.objectStore(T.outbox)
-  const at = Date.now()
-  for (const note of list) {
-    store.put(plain(note))
-    if (queueSync) outbox.add({ type: 'note.upsert', noteId: note.id, createdAt: at })
-  }
-  await done(t)
-}
-/** 写笔记 + 附件元数据 + outbox 追加，同一事务（离线队列原子性） */
-export async function saveNote(note: JotNote, queueSync = true) {
-  await saveNotes([note], queueSync)
-}
-export async function tombstone(id: string) {
-  const d = await open()
-  const t = await tx(d, [T.notes, T.outbox], 'readwrite')
-  const n = await req<JotNote | undefined>(t.objectStore(T.notes).get(id))
-  if (n) t.objectStore(T.notes).put({ ...n, deleted: true, updatedAt: Date.now() })
-  t.objectStore(T.outbox).add({ type: 'note.delete', noteId: id, createdAt: Date.now() })
-  await done(t)
-}
-export async function putHistory(note: JotNote) {
-  const d = await open()
-  const t = d.transaction(T.history, 'readwrite')
-  t.objectStore(T.history).add({ noteId: note.id, snap: note, at: Date.now() })
   await done(t)
 }
 
@@ -207,7 +113,7 @@ export async function trimBlobs(keep = 20, protect: Set<string> = new Set()) {
     .filter(([k]) => !k.endsWith(':thumb') && !protect.has(k))
     .sort((a, b) => b[1] - a[1])
   if (cand.length <= keep) return
-  const t = await tx(d, [T.blobs, T.kv], 'readwrite')
+  const t = d.transaction([T.blobs, T.kv], 'readwrite')
   for (const [k] of cand.slice(keep)) { evictBlob(t.objectStore(T.blobs), k); merged.delete(k) }
   t.objectStore(T.kv).put({ k: 'blobLru', v: Object.fromEntries(merged) })
   await done(t)

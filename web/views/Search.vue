@@ -1,16 +1,22 @@
 <script setup lang="ts">
+defineOptions({ name: 'Search' })
+import { useViewScroll } from '../lib/useViewScroll'
 /** Search — 全文搜索：本地索引 + 类型/标签过滤 + 高亮片段。 */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useUi } from '../host'
-import { pop, push } from '../lib/nav'
+import { pop, push, nav } from '../lib/nav'
 import { index, notes, tags } from '../state/store'
 import type { Hit } from '../lib/search'
 import Empty from '../components/Empty.vue'
 
+const list = ref<HTMLElement | null>(null)
+useViewScroll(list)
 const icons = useUi().icons
-const q = ref('')
-const typeFilter = ref<'' | 'image' | 'audio'>('')
-const tagFilter = ref('')
+const saved = nav.current.state ??= {}
+const q = ref(String(saved.q ?? ''))
+const typeFilter = ref<'' | 'image' | 'audio'>((saved.kind as any) ?? '')
+const tagFilter = ref(String(saved.tag ?? ''))
+watch([q, typeFilter, tagFilter], ([q, kind, tag]) => Object.assign(saved, { q, kind, tag }), { flush: 'sync' })
 
 const FIELD_LABEL: Record<string, string> = { title: '标题', text: '正文', ocr: 'OCR', transcript: '转写', todo: '待办' }
 
@@ -31,11 +37,11 @@ function highlight(s: string): string {
   return s.replace(new RegExp(`(${esc})`, 'gi'), '⟨$1⟩')
 }
 
-onMounted(() => setTimeout(() => document.getElementById('jot-search')?.focus(), 60))
+onMounted(() => { if (!q.value) document.getElementById('jot-search')?.focus() })
 </script>
 
 <template>
-  <div class="mx-auto flex h-full w-full max-w-2xl flex-col gap-3 overflow-y-auto px-4 pb-28 pt-3">
+  <div ref="list" class="mx-auto flex h-full w-full max-w-2xl flex-col gap-3 overflow-y-auto px-4 pb-28 pt-3">
     <div class="sticky top-0 z-10 -mx-4 flex items-center gap-2 bg-bg-0/85 px-3 py-2 backdrop-blur-xl">
       <button type="button" class="cursor-pointer rounded-full p-2 text-ink-1 hover:bg-glass" aria-label="返回" title="返回" @click="pop()">
         <component :is="icons.ChevronLeft" :size="20" />

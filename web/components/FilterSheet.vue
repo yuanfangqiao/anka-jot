@@ -33,6 +33,7 @@ function reset() {
 
 <template>
   <div
+    role="dialog" aria-modal="true" aria-label="筛选笔记"
     class="absolute inset-0 z-50 flex items-end justify-center bg-black/45 jot-overlay-blur"
     @click="emit('close')"
   >

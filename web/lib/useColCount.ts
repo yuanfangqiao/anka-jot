@@ -1,16 +1,15 @@
 /** useColCount — 时间线响应式列数（JS matchMedia，不赌宿主 md:/lg: 变体是否存在）：
- *  手机 2 列 / ≥768px 3 列 / ≥1280px 4 列。首页与收藏页共用。 */
+ *  手机（<640px）2 列 / 平板与电脑（≥640px）统一 5 列。首页、收藏与待办共用。 */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-const MQ = ['(min-width: 1280px)', '(min-width: 768px)'] as const
+const MQ = ['(min-width: 640px)'] as const
 
 export function useColCount() {
   const colCount = ref(2)
   const mqs: MediaQueryList[] = []
 
   function sync() {
-    colCount.value = window.matchMedia(MQ[0]).matches ? 4
-      : window.matchMedia(MQ[1]).matches ? 3 : 2
+    colCount.value = window.matchMedia(MQ[0]).matches ? 5 : 2
   }
 
   onMounted(() => {

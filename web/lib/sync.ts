@@ -1,7 +1,7 @@
-/** sync.ts — 同步引擎（DESIGN 方案 B：/call 推拉，笔记级 LWW）。
+/** sync.ts — 同步引擎（DESIGN 方案 B：/call 推拉，基准字段合并）。
  *  推送：outbox 顺序消费；媒体先于 note.upsert 上传（分块 base64）。
- *  拉取：snapshot(sinceRev) 增量合并，rev 大者胜。
- *  触发：online 事件 + 60s 前台心跳 + 手动。 */
+ *  拉取：snapshot(sinceRev) 增量合并，保护本地草稿并按基准合并。
+ *  触发：online 事件 + 3s 前台增量心跳 + 手动。 */
 import { reactive } from 'vue'
 import { callJot, type JotAtt, type JotNote } from '../host'
 import * as db from './db'
@@ -10,12 +10,14 @@ import { prewarmThumbs } from './media'
 import { refreshMedia } from './useMedia'
 import { ensureLocalThumbnail } from './thumbnails'
 import { mergeMediaPaths, recoverPending } from './syncRecovery'
+import { notifyNotes } from './noteEvents'
 
 const CHUNK = 768 * 1024 // base64 前原始字节/块
 
 export const syncState = reactive({
   online: typeof navigator === 'undefined' ? true : navigator.onLine,
   pending: 0,
+  conflictNoteId: '',
   syncing: false,
   backendUp: null as boolean | null, // null=未知
   lastError: '',
@@ -130,12 +132,14 @@ async function drainOutbox(): Promise<void> {
             continue
           }
           const fresh = await db.attsOf(note.id)
-          const r = await callJot('upsert_note', { note: stripLocal(note), atts: fresh.map(stripAtt) })
-          if (r?.applied) { await markSynced(note, r.serverRev); dirty.add(note.id) }
+          const r = await callJot('upsert_note', { note: stripLocal(note), mutationId: note.mutationId, base: note.syncBase ? stripLocal(note.syncBase) : undefined, atts: fresh.map(stripAtt) })
+          if (r?.applied) {
+            if (r.conflicts?.length) syncState.conflictNoteId = note.id
+            await db.acceptSynced(note, r.note ?? { ...note, rev: r.serverRev })
+            dirty.add(note.id)
+          }
           else {
             if (r?.note) await db.putHistory(r.note)
-            const latest = await db.getNote(note.id)
-            if (latest && r?.serverRev) await db.saveNote({ ...latest, rev: r.serverRev }, false)
             throw new Error('笔记版本已变化，保留本地编辑并等待重试')
           }
         } else if (it.type === 'note.delete' && it.noteId) {
@@ -170,26 +174,18 @@ async function drainOutbox(): Promise<void> {
     await refreshPending()
     if (syncState.pending === 0) syncState.lastError = '' // 队列排空即清除残留错误
     // 只回报写到的笔记：上层按 id 增量 patch，不再每次自动保存都整表重载
-    if (changed) await onChanged?.([...dirty])
+    if (changed) { await onChanged?.([...dirty]); notifyNotes([...dirty]) }
   }
 }
 
 export function stripLocal(n: JotNote) {
-  const { syncState: _s, atts: _a, ...rest } = n as any
+  const { syncState: _s, atts: _a, syncBase: _base, mutationId: _mutation, ...rest } = n as any
   return rest
 }
 export function stripAtt(a: JotAtt) {
   const { pendingOcr: _p, ...rest } = a as any
   return rest
 }
-async function markSynced(sent: JotNote, serverRev?: number) {
-  const n = await db.getNote(sent.id)
-  if (!n) return
-  const rev = serverRev ?? n.rev ?? 0
-  if (n.syncState === 'synced' && n.rev === rev) return
-  await db.saveNote({ ...n, syncState: n.updatedAt === sent.updatedAt ? 'synced' : 'local', rev }, false)
-}
-
 // ─── 拉取合并 ──────────────────────────────────────
 export async function pullMerge(full = false): Promise<number> {
   let since = full ? 0 : (await db.kvGet<number>('lastPullRev')) ?? 0
@@ -206,8 +202,7 @@ export async function pullMerge(full = false): Promise<number> {
         continue
       }
       if (local && sn.rev < (local.rev ?? 0)) continue
-      const note: JotNote = { ...sn, syncState: 'synced' }
-      await db.saveNote(note, false)
+      if (!(await db.acceptRemote(sn))) continue
       dirty.add(sn.id)
       const localAtts = await db.attsOf(sn.id)
       // 只有笔记确实被删除才清附件。服务端对附件是「按 id 增量写、不隐式删」，
@@ -227,7 +222,7 @@ export async function pullMerge(full = false): Promise<number> {
     syncState.lastPullRev = since
     if (!snap.hasMore) break
   }
-  if (applied) await onChanged?.([...dirty])
+  if (applied) { await onChanged?.([...dirty]); notifyNotes([...dirty]) }
   return applied
 }
 
@@ -277,7 +272,7 @@ export function startSyncLoop() {
   window.addEventListener('pageshow', resume)
   document.addEventListener('visibilitychange', resume)
   void syncNow(true)
-  timer = window.setInterval(() => { if (!document.hidden) void syncNow() }, 60_000)
+  timer = window.setInterval(() => { if (!document.hidden) void syncNow() }, 3_000)
 }
 export function stopSyncLoop() {
   window.clearInterval(timer)

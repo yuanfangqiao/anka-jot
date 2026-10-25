@@ -1,7 +1,9 @@
 <script setup lang="ts">
+defineOptions({ name: 'Todo' })
+import { useViewScroll } from '../lib/useViewScroll'
 /** Todo — 顶部「待办」视图：不另写卡片，直接复用首页 NoteCard 与瀑布流。
  *  只筛出「打了待办标志」的笔记（与事项列表无关）：还有没勾完的排上面，全部勾完的收进折叠区。
- *  数据来自 store（本地事实源，同步在后台已完成），改勾选仍进详情操作。 */
+ *  数据来自 store（本地事实源，同步在后台已完成），卡片直接勾选并可撤销。 */
 import { computed, ref } from 'vue'
 import { useUi, type JotNote } from '../host'
 import { notes, tags } from '../state/store'
@@ -10,6 +12,8 @@ import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
 import { useColCount, splitCols } from '../lib/useColCount'
 
+const list = ref<HTMLElement | null>(null)
+useViewScroll(list)
 const icons = useUi().icons
 const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.name, t.color])))
 
@@ -57,7 +61,7 @@ function open(n: JotNote) { push('note', { id: n.id }) }
       </div>
     </header>
 
-    <div class="jot-scroll-pad mt-3 min-h-0 flex-1 overflow-y-auto px-4">
+    <div ref="list" class="jot-scroll-pad mt-3 min-h-0 flex-1 overflow-y-auto px-4">
       <div v-if="pendingNotes.length" class="jot-cols">
         <div v-for="(col, ci) in pendingCols" :key="ci" class="jot-col">
           <NoteCard

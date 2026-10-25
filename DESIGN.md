@@ -46,7 +46,7 @@
 ## 2. 功能分层与范围
 
 ### P0（MVP，必做）
-1. **一键新建 + 四入口**：首页常驻「＋」+ 快捷四宫格（文本/拍照/相册/语音），对应设计稿首页
+1. **一键新建 + 五入口**：首页底部采集栏提供文字/拍照/录像/相册/录音；另支持非输入区域直接粘贴图文新建（2026-10-25）
 2. **文字速记**：纯文本 + 轻格式（标题、加粗、清单、@标签）；草稿自动存，关闭不丢
 3. **实时拍照 + 连拍**：getUserMedia 后置预览、快门、连拍、自动压缩；拍完直接进当前笔记
 4. **相册选图**：多选、自动生成缩略图、按时间排序
@@ -82,7 +82,7 @@
 
 | 页面 | 对应设计稿 | 说明 |
 |---|---|---|
-| `HomeTimeline` | 屏①「随记」 | 搜索栏、卡片流（缩略图+标题+语音徽标+标签）、四入口快捷钮、底部 Tab |
+| `HomeTimeline` | 屏①「随记」 | 搜索栏、卡片流（缩略图+标题+语音徽标+标签）、五入口底部采集栏、顶部导航 |
 | `NoteDetail` | 屏②「项目A周会」 | 笔记详情：文本区、图片九宫格、音频卡（波形+进度）、转写面板、标签行、元数据行、「创建待办」「添加相片」 |
 | `CameraView` | 屏③ | 全屏取景、闪光灯/切换相机、连拍；**扫描子模式**：边缘检测虚线框 + 底部「重拍/确认扫描/提取文本」面板 |
 | `CalendarView` | 屏④ | 月历切换 + 垂直时间轴（时刻圆点 + 卡片：图集/音频波形/文本） |
@@ -91,11 +91,12 @@
 | `SearchView` | — | 搜索结果 + 过滤器（类型/标签/地点/时间段） |
 | `SettingsView`（我的） | — | 位置开关、转写语言、存储占用、导出、关于 |
 
-**底部 Tab（移动端）**：首页 / 日历 / ＋ / 发现 / 我的。「＋」弹出 ActionSheet（文本/拍照/相册/语音）。桌面端（`uiCtx.layout.isWide`）改为左栏列表 + 右栏详情双栏，无底部 Tab。
+**当前导航与布局（2026-10-25，取代早期底部 Tab / 桌面双栏草案）**：顶部统一为首页 / 待办 / 收藏 / 日历 / 发现，「即刻」徽标打开我的。保留单页卡片主设计；手机（<640px）双列，平板与电脑（≥640px）统一五列。首页外层铺满应用，卡片区与按钮组最大宽度 1088px；底部采集栏背景通栏，电脑和平板高度 47px，手机保留 63px 图标栏。宿主 Dock 独立位于应用下方。
 
 ### 3.2 关键交互细节
 
 - **新建即编辑**：点「文本」直接进 `NoteDetail`（空草稿），键盘弹起，**每 500ms 防抖自动存 IndexedDB**；未产生任何内容就退出则自动丢弃空笔记。
+- **粘贴即记（2026-10-25）**：`state/paste.ts` 监听用户触发的原生 paste，仅当前可见 Jot 生效，卸载移除。非输入区提取 text/plain 与图片文件，复用 attachImage → flushSave → 打开编辑；输入框文字走原生粘贴，详情正文图片追加到当前笔记。忽略空剪贴板、非图片文件和 HTML 远端图片；相机/录音与弹层期间不触发新建。不同笔记的详情实例按 id 隔离，避免连续粘贴时沿用旧草稿。
 - **拍完即存**：相机快门 → 压缩/缩略图管线（§8.4）→ 写入当前笔记附件；连续快门进入连拍队列，逐张落盘，UI 显示队列角标。杀进程恢复：IDBFs 中已有 blob 的附件自动挂回。
 - **说完出字**：录音页上半部实时波形，下半部实时转写流（interim 结果灰色、final 黑色，仿屏②）；不支持转写的平台显示「仅录音」徽标，事后可点「转文字」。
 - **编辑转写**：转写面板支持逐句点改；修改标记 `edited:true`，搜索同时索引原文与改后文。
@@ -125,7 +126,9 @@ color       string|null      // 场景色（工作/生活/旅行/育儿）
 location    {lat,lng,name?}|null   // 可全局关闭
 syncState   'local'|'syncing'|'synced'
 deleted     boolean          // tombstone，同步用
-rev         number           // 每次变更 +1，LWW 依据
+rev         number           // 服务端单调版本
+syncBase    Note?            // 客户端上次确认的服务端内容，不上传为笔记字段
+mutationId  string?          // 本地一次写入的幂等键
 ```
 
 **Attachment**（一条笔记 0..n 个）
@@ -145,7 +148,7 @@ createdAt
 **Tag**：`name pk, color, pinned, lastUsedAt`（数量查询时实时 count）
 **Outbox**：`seq autoinc, type, payload(json), createdAt` —— 所有本地写与 outbox 追加在**同一 IDB 事务**内完成，保证离线队列原子性
 **Meta**：kv（`deviceId`、`lastPullRev`、`schemaVersion`、设置项）
-**NoteHistory**：每笔记保留最近 3 个被覆盖版本（冲突兜底 + 误删恢复）
+**NoteHistory**：修改前与冲突版本分别保存在本机 IDB / 服务端 note_history；详情可查看与恢复，服务端单次读取最近 100 条；恢复前内容也保留。
 
 ### 4.2 服务端表（SQLite DDL 草案）
 
@@ -200,22 +203,22 @@ plugins/jot/
 ### 6.2 对账流程
 1. 在线 → 推送 outbox（按 seq 顺序；媒体上传先行，op 中引用 serverPath）
 2. 推完拉取 `snapshot(since=lastPullRev)` → 与本地按 `rev/updatedAt` 比对
-3. 冲突：**字段组级 LWW**（`text`、`meta{title,tags,pinned,color}`、`attachments` 三个字段组各自比较 updatedAt），被覆盖版本存入 NoteHistory，UI 在笔记详情提供「历史」入口
+3. 冲突（2026-10-25）：以 syncBase 为基准逐字段三方合并；只修改标题不触碰远端正文。相同字段冲突时保留前后版本并提示；附件仍按 id 增量合并。IDB 读/合并/写/outbox 同事务；服务端 BEGIN IMMEDIATE 串行写入。mutationId 去重网络重试，迟到应答不覆盖本地新编辑。
 4. 删除：tombstone 传播，30 天后服务端物理清理
 
 ### 6.3 状态机（每笔记）
 `local`（本地有未推送变更）→ `syncing`（推送中）→ `synced`；推送失败回 `local` 并指数退避（1s→30s 封顶）。横幅聚合显示 outbox 深度（"N 项等待同步"）。
 
 ### 6.4 Background Sync 降级
-宿主 SW 暂不注入插件同步逻辑 → 降级为：页面存活时即时推送 + `online` 事件 + 每 60s 前台心跳补传。宿主配合点 #3 落地后无缝升级。
+宿主 SW 暂不注入插件同步逻辑 → 降级为：页面存活时即时推送 + `online` 事件 + 每 3s 前台增量心跳补传（2026-10-25）。宿主配合点 #3 落地后无缝升级。
 
 ---
 
 ### 6.5 已实现的媒体恢复策略（2026-10-17，取代相关草案）
 
 - 实际同步为 `/call` outbox 单队列，媒体上传在 note.upsert 之前；取消并行写穿透。写入过程中发生的新编辑保留 local 状态。
-- 失败项仅增加计数并跳过，保留队列等待恢复；冲突版本留档，本地编辑保留并依据返回 rev 后续重试。
-- 冷启动/回前台/pageshow/online/下拉刷新做全量 metadata 对账；同 rev 或 local 笔记仅补相同附件（sha 不冲突）的缺失路径，不覆盖本地正文、不恢复本地已删附件。普通 60 秒心跳增量拉取。
+- 失败项仅增加计数并跳过，保留队列等待恢复；冲突版本留档；新版按基准逐字段合并，旧客户端冲突不自动提升 rev 后覆盖。
+- 冷启动/回前台/pageshow/online/下拉刷新做全量 metadata 对账；同 rev 或 local 笔记仅补相同附件（sha 不冲突）的缺失路径，不覆盖本地正文、不恢复本地已删附件。普通 3 秒心跳增量拉取；同源页面通过 BroadcastChannel 在事务完成后通知。详情阅读时更新，输入聚焦时保留草稿、延迟应用远端内容。
 - 图片/视频列表顺序：本地小图 → 远端小图 → 从本地 full 补生成 → 服务端补生成；不自动下载远端 full。点击图片后才加载 full（现有 ≤2048px 规格），视频点击后才加载原片。生成失败也保存原文件。
 - 封面统一最长边 480px 的 JPEG，浏览器视频抽帧使用一个 video 完成 metadata/seek/canvas，超时/结束释放解码器。`MediaPreview` 经 IntersectionObserver 接近视口时加载，避免旧媒体补图排队阻塞首屏。
 - `useMedia.ts` 为组件生成独立 object URL，替换 DOM 后释放；取消/卸载丢弃迟到结果。缓存层 URL 不允许由展示层撤销；LRU 淘汰不破坏正在显示的媒体。
@@ -330,7 +333,7 @@ server/
 | `snapshot` | `{sinceRev?}` | `{notes,attachments,tags,serverRev}` | 对账拉取（全量/增量） |
 | `calendar_counts` | `{dayStarts:number[], knownRev?}` | `{days:number[], rev, unchanged}` | 日历整月打点：客户端给 N+1 个本地零点毫秒边界，服务端只做区间计数；`knownRev` 命中只回 `rev` |
 | `notes_by_day` | `{startMs, endMs, cursor?, limit?}` | `{notes, nextCursor, hasMore}` | 日历当日列表 keyset 分页（`createdAt DESC, id DESC`）；正文只回 600 字 `preview` + `textLen` |
-| `upsert_note` | `{note, atts?, removedAtts?}` | `{ok,serverRev}` | LWW 合并；`atts` 按 id 增量 upsert（不隐式删除），删除必须走 `removedAtts` |
+| `upsert_note` | `{note, base?, mutationId?, atts?, removedAtts?}` | `{note,applied,serverRev,conflicts}` | 按基准逐字段合并与幂等写入；`atts` 按 id 增量 upsert（不隐式删除），删除必须走 `removedAtts` |
 | `delete_note` | `{id}` | `{ok}` | tombstone |
 | `list_tags` | `{}` | `{tags:[{name,color,pinned,count}]}` | |
 | `upload_begin` | `{attId,kind,mime,size,sha256,thumbB64?}` | `{ok,exists?,path?,thumbPath?,thumbnailError?}` | 秒传也返回/修复小图路径 |

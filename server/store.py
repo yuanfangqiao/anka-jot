@@ -1,124 +1,30 @@
-"""即刻 Jot — SQLite 持久化层（线程安全：每次调用独立连接）。
-
-表：notes / atts / tags / media / kv。notes.rev 全局单调递增（服务端权威），
-LWW 依据：客户端 rev 取自上次同步时的 serverRev 副本 —— v1 采用笔记级 LWW：
-client_rev >= server_rev 则覆盖，否则保留服务端并回传。
-"""
-
-import base64
-import bisect
+"""SQLite store. Sibling modules are loaded by path like the host plugin loader."""
+import importlib.util
 import json
-import re
 import sqlite3
 import time
-import uuid
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS notes(
-  id TEXT PRIMARY KEY, title TEXT DEFAULT '', text TEXT DEFAULT '',
-  tags TEXT DEFAULT '[]', source TEXT DEFAULT 'text',
-  createdAt REAL, updatedAt REAL, pinned INTEGER DEFAULT 0,
-  fav INTEGER DEFAULT 0, todo INTEGER DEFAULT 0, todos TEXT DEFAULT '[]',
-  color TEXT, location TEXT, deleted INTEGER DEFAULT 0, rev INTEGER DEFAULT 0);
-CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updatedAt DESC);
--- 日历天列表：排序与 keyset 定位（(createdAt,id) 复合，毫秒并列也稳定）
-CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(createdAt DESC, id DESC);
--- 日历整月计数：只索引存活行，区间 COUNT 走 index-only scan
-CREATE INDEX IF NOT EXISTS idx_notes_alive_created ON notes(createdAt) WHERE deleted=0;
-CREATE TABLE IF NOT EXISTS atts(
-  id TEXT PRIMARY KEY, noteId TEXT, kind TEXT, serverPath TEXT, thumbPath TEXT,
-  width REAL, height REAL, duration REAL, peaks TEXT, ocrText TEXT,
-  transcript TEXT, sha256 TEXT, size INTEGER, createdAt REAL);
-CREATE INDEX IF NOT EXISTS idx_atts_note ON atts(noteId);
-CREATE TABLE IF NOT EXISTS tags(
-  name TEXT PRIMARY KEY, color TEXT, pinned INTEGER DEFAULT 0, lastUsedAt REAL);
-CREATE TABLE IF NOT EXISTS media(
-  sha256 TEXT PRIMARY KEY, path TEXT, size INTEGER, kind TEXT, createdAt REAL);
-CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
-"""
 
-NOTE_COLS = ('id', 'title', 'text', 'tags', 'source', 'createdAt', 'updatedAt',
-             'pinned', 'fav', 'todo', 'todos', 'color', 'location', 'deleted', 'rev')
-# 日历卡片投影：不带全文（MAX_TEXT_LEN 20 万，逐条回传会让单页膨胀到 MB 级）
-CARD_COLS = ('id', 'title', 'tags', 'source', 'createdAt', 'updatedAt',
-             'pinned', 'fav', 'todo', 'todos', 'color', 'location', 'rev')
-CARD_SQL = (f'{",".join(CARD_COLS)}, '
-            "COALESCE(substr(text,1,600),'') AS preview, "
-            "COALESCE(length(text),0) AS textLen")
-CARD_FIELDS = CARD_COLS + ('preview', 'textLen')
-ATT_COLS = ('id', 'noteId', 'kind', 'serverPath', 'thumbPath', 'width', 'height',
-            'duration', 'peaks', 'ocrText', 'transcript', 'sha256', 'size', 'createdAt')
-JSON_FIELDS = {'tags', 'location', 'peaks', 'transcript', 'todos'}
-BOOL_FIELDS = ('pinned', 'fav', 'todo', 'deleted')
-
-LEGACY_TODO_RE = re.compile(r'^\s*[-*]\s*\[([ xX])\]\s*(.*)$')
+def _sibling(name):
+    spec = importlib.util.spec_from_file_location(f'{__name__}_{name}', Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def encode_cursor(created_at: float, note_id: str) -> str:
-    """天列表游标：不透明字符串，客户端不解析，便于以后换排序键。"""
-    raw = f'{float(created_at)!r}|{note_id}'.encode('utf-8')
-    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+schema, writer = _sibling('schema'), _sibling('note_writes')
+SCHEMA, NOTE_COLS, ATT_COLS = schema.SCHEMA, schema.NOTE_COLS, schema.ATT_COLS
+CARD_SQL, CARD_FIELDS = schema.CARD_SQL, schema.CARD_FIELDS
+JSON_FIELDS, BOOL_FIELDS = schema.JSON_FIELDS, schema.BOOL_FIELDS
+_row_to_dict, _load_todos = schema._row_to_dict, schema._load_todos
+split_legacy_todos = schema.split_legacy_todos
+encode_cursor, decode_cursor = schema.encode_cursor, schema.decode_cursor
+bisect = schema.bisect
 
 
-def decode_cursor(cursor) -> tuple[float, str] | None:
-    if not cursor:
-        return None
-    try:
-        text = str(cursor)
-        pad = '=' * (-len(text) % 4)
-        raw = base64.urlsafe_b64decode(text + pad).decode('utf-8')
-        ts, _, nid = raw.partition('|')
-        return float(ts), nid
-    except Exception as exc:
-        raise ValueError('游标非法') from exc
-
-
-def split_legacy_todos(text: str) -> tuple[str, list]:
-    """把老版本正文里的 `- [ ]` 行拆成结构化事项（与前端同一规则）。
-    返回 (纯正文, 事项列表)；正文尾部空行清掉，不改动其他内容。"""
-    body: list[str] = []
-    todos: list = []
-    for line in (text or '').split('\n'):
-        m = LEGACY_TODO_RE.match(line)
-        if m and m.group(2).strip():
-            todos.append({'id': uuid.uuid4().hex, 'text': m.group(2).strip(),
-                          'done': m.group(1).lower() == 'x'})
-            continue
-        body.append(line)
-    while body and not body[-1].strip():
-        body.pop()
-    return '\n'.join(body), todos
-
-
-def _load_todos(raw) -> list:
-    if not raw:
-        return []
-    if isinstance(raw, list):
-        return raw
-    try:
-        val = json.loads(raw)
-    except Exception:
-        return []
-    return val if isinstance(val, list) else []
-
-
-def _row_to_dict(row, cols):
-    d = dict(zip(cols, row))
-    for f in JSON_FIELDS & d.keys():
-        if isinstance(d[f], str):
-            try:
-                d[f] = json.loads(d[f])
-            except Exception:
-                d[f] = None
-    for b in BOOL_FIELDS:
-        if b in d:
-            d[b] = bool(d[b])
-    return d
-
-
-class Store:
+class Store(writer.make_writer(schema)):
     def __init__(self, data_dir: Path):
         data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = data_dir / 'jot.db'
@@ -177,111 +83,6 @@ class Store:
         with closing(self._c()) as c, c:
             row = c.execute("SELECT v FROM kv WHERE k='serverRev'").fetchone()
             return int(row[0]) if row else 0
-
-    # ─── 笔记 ────────────────────────────────────────
-    def upsert_note(self, note: dict, atts: list | None,
-                    removed_att_ids: list | None = None) -> tuple[dict, bool]:
-        """LWW 合并。返回 (最终笔记, 是否采用了客户端版本)。
-
-        附件语义：atts=None → 不动附件；atts=list → 按 id 增量 upsert（不做隐式删除）。
-        删除必须显式放在 removed_att_ids 里——全量替换会让「客户端列表过期」
-        变成静默丢附件（OCR / 转写 / 波形元数据一起没）。
-        """
-        nid = note.get('id')
-        if not nid:
-            raise ValueError('note.id 缺失')
-        now = time.time() * 1000
-        with closing(self._c()) as c, c:
-            row = c.execute('SELECT rev, todo, todos FROM notes WHERE id=?', (nid,)).fetchone()
-            server_rev = row[0] if row else -1
-            try:
-                client_rev = int(note.get('rev') or 0)
-            except (TypeError, ValueError):
-                raise ValueError('note.rev 非法')
-            applied = client_rev >= server_rev
-            new_rev = self._next_rev(c)
-            if applied:
-                vals = {k: note.get(k) for k in NOTE_COLS if k != 'rev'}
-                vals['rev'] = new_rev
-                vals['updatedAt'] = note.get('updatedAt') or now
-                vals['createdAt'] = note.get('createdAt') or now
-                vals.setdefault('title', '')
-                # 事项缺省保留：旧客户端 / 旧备份不带 todo(s) 时不能把库里的清空
-                text = note.get('text') or ''
-                if note.get('todos') is None:
-                    todos = _load_todos(row[2]) if row else []
-                    if not todos:
-                        text, todos = split_legacy_todos(text)
-                else:
-                    todos = note.get('todos') or []
-                    if not todos:
-                        text, todos = split_legacy_todos(text)  # 旧客户端仍把事项写在正文
-                todo_flag = note.get('todo')
-                if todo_flag is None:
-                    todo_flag = bool(row[1]) if row else False
-                vals['text'] = text
-                vals['todos'] = todos
-                for f in JSON_FIELDS & vals.keys():
-                    vals[f] = json.dumps(vals[f], ensure_ascii=False)
-                vals['pinned'] = 1 if note.get('pinned') else 0
-                vals['fav'] = 1 if note.get('fav') else 0
-                vals['todo'] = 1 if todo_flag else 0
-                vals['deleted'] = 1 if note.get('deleted') else 0
-                cols = ','.join(NOTE_COLS)
-                marks = ','.join('?' * 1 for _ in NOTE_COLS)
-                c.execute(f'INSERT INTO notes({cols}) VALUES({marks}) '
-                          'ON CONFLICT(id) DO UPDATE SET '
-                          + ','.join(f'{k}=excluded.{k}' for k in NOTE_COLS),
-                          tuple(vals[k] for k in NOTE_COLS))
-                for a in atts or []:
-                    self._insert_att(c, nid, a)
-                for aid in removed_att_ids or []:
-                    c.execute('DELETE FROM atts WHERE id=? AND noteId=?', (str(aid), nid))
-                for t in (note.get('tags') or []):
-                    c.execute('INSERT INTO tags(name,lastUsedAt) VALUES(?,?) '
-                              'ON CONFLICT(name) DO UPDATE SET lastUsedAt=excluded.lastUsedAt',
-                              (t, now))
-            final = self.get_note(nid, c)
-            return final, applied
-
-    def _insert_att(self, c, note_id: str, a: dict):
-        vals = {k: a.get(k) for k in ATT_COLS}
-        vals['noteId'] = note_id
-        if not vals.get('id'):
-            raise ValueError('attachment.id 缺失')
-        for f in ('peaks', 'transcript'):
-            vals[f] = json.dumps(vals[f], ensure_ascii=False) if vals[f] is not None else None
-        cols = ','.join(ATT_COLS)
-        c.execute(f'INSERT INTO atts({cols}) VALUES({",".join("?" for _ in ATT_COLS)}) '
-                  'ON CONFLICT(id) DO UPDATE SET '
-                  + ','.join(f'{k}=excluded.{k}' for k in ATT_COLS),
-                  tuple(vals[k] for k in ATT_COLS))
-
-    def get_note(self, nid: str, c=None) -> dict | None:
-        own = c is None
-        c = c or self._c()
-        try:
-            row = c.execute(f'SELECT {",".join(NOTE_COLS)} FROM notes WHERE id=?',
-                            (nid,)).fetchone()
-            if not row:
-                return None
-            note = _row_to_dict(row, NOTE_COLS)
-            rows = c.execute(f'SELECT {",".join(ATT_COLS)} FROM atts WHERE noteId=? '
-                             'ORDER BY createdAt', (nid,)).fetchall()
-            note['atts'] = [_row_to_dict(r, ATT_COLS) for r in rows]
-            return note
-        finally:
-            if own:
-                c.close()
-
-    def delete_note(self, nid: str) -> bool:
-        with closing(self._c()) as c, c:
-            if not c.execute('SELECT 1 FROM notes WHERE id=?', (nid,)).fetchone():
-                return False
-            rev = self._next_rev(c)
-            c.execute('UPDATE notes SET deleted=1, rev=?, updatedAt=? WHERE id=?',
-                      (rev, time.time() * 1000, nid))
-            return True
 
     def snapshot(self, since_rev: int = 0, limit: int = 500) -> dict:
         """增量快照（分页）：nextRev=本页最大 rev，客户端以其为新水位；hasMore 表示还有剩余。"""

@@ -4,15 +4,16 @@
 
 ## 这是什么
 
-「即刻」是 anka 平台上的随手记应用：文字 / 拍照 / 相册 / 语音四入口，离线优先（IndexedDB 为设备端事实源），支持拍照 OCR、语音实时转写、全文搜索、标签与时间线。中文名**即刻**，英文 **Jot**。
+「即刻」是 anka 平台上的随手记应用：文字 / 拍照 / 录像 / 相册 / 录音五入口，支持粘贴即记，离线优先（IndexedDB 为设备端事实源），支持拍照 OCR、语音实时转写、全文搜索、标签与时间线。中文名**即刻**，英文 **Jot**。
 
 核心原则：**打开即记（≤1 步）、拍完即存（≤2 步，杀进程不丢）、说完出字、事后好找**。
 
-## 当前功能（v0.1.0）
+## 当前功能（v0.1.6）
 
 ### 已实现 ✅
-- **一键新建 + 五入口**：底部「＋」ActionSheet / 首页五宫格 → 文本、拍照、视频、相册、语音
+- **一键新建 + 五入口**：首页底部采集栏 → 文字、拍照、录像、相册、录音；平板与电脑共用 47px 图文工具栏，手机显示图标
 - **文字速记**：标题 + 正文（`@标签` 语法）+ 独立事项列表，500ms 防抖自动存草稿，退出不丢；空笔记自动丢弃
+- **粘贴即记**：打开 Jot，在非输入区域 Ctrl+V / Cmd+V，文字与图片直接成为新笔记并进入编辑；详情正文支持追加图片，搜索和文字输入保留原生粘贴。
 - **实时拍照 + 连拍**：getUserMedia 后置取景、快门、连拍队列、自动压缩（≤2048px）+ 缩略图（480px）；**扫描模式**（参考框 + 拍后一键 OCR）
 - **相册导入**：多选（图片+视频）、压缩、缩略图、按时间入流
 - **视频笔记**：系统相机录像（`<input capture>` 直呼，免网页授权）+ 相册导入（≤100MB）；自动抽封面帧做海报，主页视频卡点封面全屏播放、点边框进详情
@@ -24,14 +25,16 @@
 - **日历视图**：月历打点 + 当日垂直时间轴
 - **发现页**：最近标签、智能相册（按地点/周自动聚合）、AI 本周摘要卡
 - **全文搜索**：标题/正文/OCR/转写，中文 bigram + 英文按词，权重排序，结果高亮片段；过滤器（类型/标签）
-- **离线优先**：全部写操作先落 IndexedDB；离线横幅「N 项待同步」；联网自动补传 + 60s 前台心跳
-- **多端同步**：`/api/apps/jot/call` 推拉（方案 B），笔记级 LWW + rev，冲突留本地历史（最近 3 版）
+- **连续浏览与编辑**：详情返回保留搜索和列表位置；待办卡片就地勾选并可撤销；正文自然展开、详情整页滚动
+- **响应式卡片**：手机双列，平板与电脑统一五列；文字卡按剩余高度展示正文，底栏背景铺满应用窗口
+- **离线优先**：全部写操作先落 IndexedDB；离线横幅「N 项待同步」；联网自动补传 + 3s 前台增量心跳
+- **多端同步**：`/api/apps/jot/call` 推拉（方案 B），syncBase 逐字段合并 + mutationId 幂等；本机与服务端留档，详情可恢复
 - **AI 助手**：单篇「AI 摘要 / 提取待办」（依赖宿主模型配置，无 Key 时优雅降级）
 - **设置页**：位置/转写语言开关、存储用量、JSON 导出、后端状态
 
 ### 已知限制 ⚠️
 - **iOS Safari(PWA) 不支持 SpeechRecognition** → iPhone 上「仅录音」，转写按钮待服务端 whisper 适配器（未配置时提示不可用）
-- 同步为轮询推拉（60s + online 事件），未接 `ctx.sync` WebSocket 实时通道（spike T0 待验证，见 DESIGN §6.1）
+- 同步为轮询推拉（前台 3s + online 事件，同源页面变更广播），未接 `ctx.sync` WebSocket 实时通道（spike T0 待验证，见 DESIGN §6.1）
 - 对端笔记的媒体文件按需在线加载（离线未下载的远程图显示占位）
 - 扫描模式仅参考框引导，未做透视裁边
 - 分享剪藏（share_target）与 Background Sync 依赖宿主 manifest/SW 改动，未开启
@@ -39,9 +42,9 @@
 ## 数据与隐私
 
 - 设备端：IndexedDB `jot-db`（notes / atts / blobs / tags / outbox / kv / history）
-- 服务端：`plugins/jot/data/`（`jot.db` + `media/<sha256 前两位>/<sha256>.<ext>` 内容寻址，天然去重）
-- 媒体 URL：`/plugins/jot/data/media/...`（dev 由 vite 中间件伺服，prod 由 FastAPI StaticFiles）
-- 备份 = 复制 `plugins/jot/data/` 目录；应用内零鉴权，公网部署依赖 Caddy basic_auth
+- 服务端：`plugins/anka-jot/data/`（`jot.db` + `media/<sha256 前两位>/<sha256>.<ext>` 内容寻址，天然去重）
+- 媒体 URL：`/plugins/anka-jot/data/media/...`（dev 由 vite 中间件伺服，prod 由 FastAPI StaticFiles）
+- 备份 = 复制 `plugins/anka-jot/data/` 目录；应用内零鉴权，公网部署依赖 Caddy basic_auth
 - 卸载插件不删除数据目录（当前内核行为）
 
 ## 开发记录
@@ -79,6 +82,6 @@
 ## 调试
 
 - 开发：`./start_all.sh` → 插件管理页安装「即刻 Jot」→ dock 进入；改 `web/` 源码刷新即生效（vite 即时编译），改 `server/` 需重启后端
-- 生产：`cd web && npm run build` 后从 8000 端口访问（安装时自动跑 `build-plugin.mjs` 产出 `.plugin-dist/jot/index.js`）
+- 生产：从宿主仓库根目录执行 `cd web && npm run build` 后从 8000 端口访问（安装时自动跑 `build-plugin.mjs` 产出 `.plugin-dist/anka-jot/index.js`）
 - 后端日志关键字：`agentos.jot`
-- 常用排障：浏览器 DevTools → Application → IndexedDB `jot-db`；`plugins/jot/data/jot.db` 可用 sqlite3 直查
+- 常用排障：浏览器 DevTools → Application → IndexedDB `jot-db`；`plugins/anka-jot/data/jot.db` 可用 sqlite3 直查

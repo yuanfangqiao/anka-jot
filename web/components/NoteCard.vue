@@ -11,8 +11,9 @@ import { toast, useUi, type JotAtt, type JotNote } from '../host'
 import { useMedia } from '../lib/useMedia'
 import MediaPreview from './MediaPreview.vue'
 import CardFoot from './CardFoot.vue'
+import CardTodos from './CardTodos.vue'
 import { dayLabel, fmtClock, fmtBytes, fmtDur } from '../lib/format'
-import { hashCardColor } from '../lib/color'
+import TextCover from './TextCover.vue'
 import { useAudioPlayer } from '../lib/useAudioPlayer'
 import ImgViewer from './ImgViewer.vue'
 import VideoViewer from './VideoViewer.vue'
@@ -88,9 +89,6 @@ const body = computed(() =>
 
 /** 卡面首行：有清单时不再把第一条待办当标题重复一遍，清单自己会说话 */
 const heading = computed(() => props.note.title || (todos.value.length ? '' : title.value))
-
-/** 文字彩卡底色：首字哈希取色（确定性，同一笔记永远同色） */
-const tcStyle = computed(() => hashCardColor(props.note.title || text.value))
 
 /** 查看器与封面独立持有原图 URL，后台恢复时重新解析。 */
 const previewAtt = ref<JotAtt | null>(null)
@@ -186,11 +184,9 @@ async function unpinByBadge() {
     </button>
 
     <!-- 文字卡：彩底语录 -->
-    <div v-if="cardType === 'text'" class="jot-textcard" :style="tcStyle">
-      <p class="jot-tc-quote">{{ title || '·' }}</p>
-      <p v-if="body" class="jot-tc-sub">{{ body }}</p>
+    <TextCover v-if="cardType === 'text'" :note="note" :text="text">
       <CardFoot :note="note" :time="timeLabel" :todo="todoStat" :readonly="readonly" class="jot-tc-cardfoot" />
-    </div>
+    </TextCover>
 
     <!-- 图片卡：满幅封面，点图预览 -->
     <template v-else-if="cardType === 'image'">
@@ -219,23 +215,7 @@ async function unpinByBadge() {
       </div>
 
       <!-- 事项域：有清单就占满卡面剩余空间，图 / 视频 / 语音一概不显示 -->
-      <div v-if="todos.length" class="jot-comp-todos">
-        <div class="jot-comp-todos-head">
-          <span class="jot-comp-todos-title">事项</span>
-          <span class="jot-comp-todos-count">{{ todosDone }}/{{ todos.length }}</span>
-          <span class="jot-comp-todos-bar"><i :style="{ width: todoPct + '%' }" /></span>
-        </div>
-        <div
-          v-for="t in cardTodos" :key="t.id"
-          class="jot-comp-todo" :class="{ 'is-done': t.done }"
-        >
-          <span class="jot-comp-todo-box">{{ t.done ? '✓' : '' }}</span>
-          <span class="jot-comp-todo-text">{{ t.text }}</span>
-        </div>
-        <div v-if="todos.length > cardTodos.length" class="jot-comp-todos-more">
-          还有 {{ todos.length - cardTodos.length }} 条
-        </div>
-      </div>
+      <CardTodos v-if="todos.length" :note="note" :readonly="readonly" />
 
       <!-- 待办卡但还没填事项：给一句空态提示，避免卡面只剩标题 -->
       <p v-else-if="cardType === 'todo'" class="jot-comp-todos-empty">还没有事项，点开添加</p>

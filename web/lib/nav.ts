@@ -2,7 +2,7 @@
 import { reactive } from 'vue'
 import type { UiLike } from '../host'
 
-export interface NavItem { view: string; params: Record<string, string> }
+export interface NavItem { view: string; params: Record<string, string>; state?: Record<string, unknown> }
 
 /** 顶部五个标签为栈根；settings（我的）由「即刻」徽标压栈进入，故不是根。 */
 const TAB_ROOTS = new Set(['home', 'calendar', 'todo', 'favs', 'discover'])

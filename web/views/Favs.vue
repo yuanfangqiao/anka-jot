@@ -1,12 +1,16 @@
 <script setup lang="ts">
+defineOptions({ name: 'Favs' })
+import { useViewScroll } from '../lib/useViewScroll'
 /** Favs — 顶部「收藏」视图：只陈列 fav 笔记，瀑布流与首页同规格。 */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { sortedNotes, tags } from '../state/store'
 import { push } from '../lib/nav'
 import { useColCount, splitCols } from '../lib/useColCount'
 import NoteCard from '../components/NoteCard.vue'
 import Empty from '../components/Empty.vue'
 
+const list = ref<HTMLElement | null>(null)
+useViewScroll(list)
 const favs = computed(() => sortedNotes.value.filter(n => n.fav))
 const colCount = useColCount()
 const cols = computed(() => splitCols(favs.value, colCount.value))
@@ -20,7 +24,7 @@ const tagColorMap = computed(() => Object.fromEntries(tags.value.map(t => [t.nam
       <span class="jot-fs-115 text-ink-2">{{ favs.length }} 条</span>
     </header>
 
-    <div class="jot-scroll-pad mt-2 min-h-0 flex-1 overflow-y-auto px-4">
+    <div ref="list" class="jot-scroll-pad mt-2 min-h-0 flex-1 overflow-y-auto px-4">
       <div v-if="favs.length" class="jot-cols">
         <div v-for="(col, ci) in cols" :key="ci" class="jot-col">
           <NoteCard
